@@ -41,7 +41,7 @@ cp secret.auto.tfvars.example secret.auto.tfvars
 ## Ansible デプロイ
 
 手動で準備するシークレット、SSH鍵、Terraform実行、Ansibleデプロイの詳細は
-[`ansible/DEPLOYMENT.md`](ansible/DEPLOYMENT.md) を参照してください。
+[`docs/dev/DEPLOYMENT.md`](docs/dev/DEPLOYMENT.md) を参照してください。
 
 VM 作成後、ローカルの `group_vars/all.yml` に DB・レジストリ認証情報を設定します。
 

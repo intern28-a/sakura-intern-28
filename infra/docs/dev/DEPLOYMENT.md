@@ -94,7 +94,7 @@ db_user: sakuravel_app
 db_password: "..."
 ```
 
-`db_port` は、現在のManaged DB（MariaDB）のポート `3306` を指定します。DBの接続情報を変更した場合は、実際の値に合わせてください。
+`db_port` は、Terraformで作成するMariaDBの接続ポート `3306` を指定します。DBの接続情報を変更した場合は、実際の値に合わせてください。
 
 `node_private_ips` はTerraformの構成と一致させます。標準構成では変更不要です。
 
@@ -115,10 +115,13 @@ VM作成後、次の1コマンドだけを実行します。
 3. node-01へAnsible、設定ファイル、SSH秘密鍵を配置
 4. node-01のIP forwardingとNATを設定
 5. node-01からnode-02〜05へのSSH接続を準備
-6. node-02〜05へDocker、レジストリログイン、アプリケーションを設定
-7. Managed DBを使用するComposeを起動
+6. Managed DBへ未適用のデータベースマイグレーションをnode-02で一度だけ適用
+7. node-02〜05へDocker、レジストリログイン、アプリケーションを設定
+8. Managed DBを使用するComposeを起動
 
 node-01へログインしてファイルを手作業で編集したり、inventoryのIPを書き換えたりする必要はありません。
+
+初回接続時のSSHホストキーは`StrictHostKeyChecking=accept-new`で自動登録されます。登録済みホストのホストキーが変更された場合は、SSH接続を停止してエラーにします。
 
 ## 6. デプロイ結果を確認する
 
