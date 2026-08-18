@@ -30,3 +30,21 @@ output "switch_id" {
   description = "全ノードが接続する app セグメントの vSwitch ID。"
   value       = sakura_vswitch.app.id
 }
+
+output "dsr_lb_vip" {
+  description = <<-EOT
+    DSR ロードバランサの VIP。api (:8080) はこのアドレス経由で node-02〜05 へ振り分けられる。
+    app セグメント内のプライベートアドレスなので、外部からはそのまま到達できない。
+  EOT
+  value       = local.dsr_lb_vip
+}
+
+output "dsr_lb_private_ip" {
+  description = "DSR ロードバランサ本体の app セグメント上のアドレス。"
+  value       = local.dsr_lb_private_ip
+}
+
+output "dsr_lb_real_server_ips" {
+  description = "DSR ロードバランサの振り分け先 (node-02〜05)。"
+  value       = local.dsr_lb_real_server_ips
+}

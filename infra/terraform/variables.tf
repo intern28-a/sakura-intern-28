@@ -148,3 +148,49 @@ variable "db_parameters" {
   type        = map(string)
   default     = {}
 }
+
+########################################
+# DSR ロードバランサ
+########################################
+
+variable "dsr_lb_plan" {
+  description = "DSR ロードバランサのプラン。standard / highspec のいずれか。"
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "highspec"], var.dsr_lb_plan)
+    error_message = "dsr_lb_plan は standard か highspec のいずれかを指定してください。"
+  }
+}
+
+variable "dsr_lb_ip_offset" {
+  description = "app セグメント内で DSR ロードバランサ本体に割り当てるホスト番号。"
+  type        = number
+  default     = 40
+}
+
+variable "dsr_lb_vip_offset" {
+  description = <<-EOT
+    app セグメント内で VIP に割り当てるホスト番号。
+    DSR 方式のため、実サーバ (node-02〜05) 側でもこのアドレスを
+    ループバックに割り当てる必要がある。
+  EOT
+  type        = number
+  default     = 50
+}
+
+variable "dsr_lb_vrid" {
+  description = "DSR ロードバランサの VRID。同一セグメント内で重複しない値にする。"
+  type        = number
+  default     = 1
+}
+
+variable "dsr_lb_port" {
+  description = <<-EOT
+    VIP で待ち受けるポート番号。DSR 方式ではポート変換が行われないため、
+    実サーバも同じポートで待ち受ける必要がある。api コンテナは 8080。
+  EOT
+  type        = number
+  default     = 8080
+}

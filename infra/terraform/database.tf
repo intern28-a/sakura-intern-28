@@ -8,7 +8,7 @@
 #       NAT ゲートウェイを兼ねる node-01 のプライベートIPを指定する。
 
 resource "sakura_database" "db" {
-  name = "intern2026-db"
+  name = "db"
   zone = var.zone
 
   database_type    = "mariadb"
