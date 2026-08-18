@@ -24,19 +24,27 @@ func (h *Handler) GetLikes(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var uid int64
-		rows.Scan(&uid)
+		if err := rows.Scan(&uid); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		ids = append(ids, uid)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
-	var users []any
+	fetched, err := h.fetchUsersByIDs(r, ids)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	users := make([]any, 0, len(ids))
 	for _, id := range ids {
-		u, err := h.fetchUser(r, id)
-		if err == nil {
+		if u, ok := fetched[id]; ok {
 			users = append(users, u)
 		}
-	}
-	if users == nil {
-		users = []any{}
 	}
 	h.respondJSON(w, http.StatusOK, map[string]any{"users": users})
 }
