@@ -153,28 +153,25 @@ const maxThreadDepth = 50
 
 // countReplies は投稿にぶら下がる返信の数を返す。ネストした返信も含めた合計。
 func (h *Handler) countReplies(r *http.Request, postID int64, depth int) int {
+	var total int
+
 	if depth >= maxThreadDepth {
 		return 0
 	}
-
-	rows, err := h.DB.QueryContext(r.Context(),
-		`SELECT id FROM posts WHERE parent_post_id = ?`, postID)
+	err := h.DB.QueryRowContext(r.Context(), `
+		WITH RECURSIVE d AS (
+    		SELECT id, 1 AS depth FROM posts WHERE parent_post_id = ?
+    		UNION ALL
+    		SELECT p.id, d.depth + 1
+    		FROM posts p JOIN d ON p.parent_post_id = d.id
+    		WHERE d.depth < ?
+		)
+		SELECT COUNT(*) FROM d;
+	`, postID, maxThreadDepth).Scan(&total)
 	if err != nil {
 		return 0
 	}
 
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
-
-	total := len(ids)
-	for _, id := range ids {
-		total += h.countReplies(r, id, depth+1)
-	}
 	return total
 }
 
