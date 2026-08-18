@@ -138,7 +138,64 @@ cd /opt/sakuravel-ansible
 ansible-playbook site.yml
 ```
 
-## 7. SSH公開鍵をVM作成後に追加する場合
+## 7. ノートPCからWebアプリケーションへアクセスする
+
+現在の構成ではグローバルIPを持つのはnode-01だけで、Webアプリケーションはnode-02のプライベートIPで待ち受けています。動作確認時は、ノートPCからnode-01経由でSSHポートフォワードします。
+
+### 7.1 API URLをローカル向けに変更する
+
+フロントエンドはブラウザからAPIを呼び出すため、ノートPC側のAPIポートを参照するように設定します。
+
+`group_vars/all.yml` の次を変更します。
+
+```yaml
+api_url: http://localhost:8080
+```
+
+変更後、再デプロイします。
+
+```bash
+cd infra/ansible
+./deploy.sh
+```
+
+### 7.2 SSHトンネルを開く
+
+別のターミナルで、Terraform outputからnode-01の公開IPを取得してトンネルを開きます。
+
+```bash
+cd infra/terraform
+BASTION=$(terraform output -raw bastion_public_ip)
+ssh -N \
+  -L 3000:192.168.1.12:3000 \
+  -L 8080:192.168.1.12:8080 \
+  -i ~/.ssh/intern28 \
+  ubuntu@"${BASTION}"
+```
+
+このSSHコマンドは終了せず、そのまま実行しておきます。ブラウザで次へアクセスします。
+
+```text
+http://localhost:3000
+```
+
+終了するときは、SSHトンネルのターミナルで`Ctrl-C`を押します。
+
+### 7.3 APIだけを確認する
+
+SSHトンネルを開いた状態で、ノートPCから次のように確認できます。
+
+```bash
+curl http://localhost:8080/health
+```
+
+利用可能なヘルスチェックパスが異なる場合は、アプリケーションのAPI仕様に合わせてURLを変更してください。
+
+### 7.4 常時公開する場合
+
+常時公開する場合は、node-01にリバースプロキシを配置し、node-01の80/443番ポートからnode-02の3000番ポートへ転送する構成にします。HTTPS証明書、DNS、ファイアウォール設定も必要になるため、SSHトンネルとは別の本番公開構成として設計・自動化します。
+
+## 8. SSH公開鍵をVM作成後に追加する場合
 
 通常は `server_ssh_public_key_path` を設定してから `terraform apply` するため、この作業は不要です。
 
@@ -156,7 +213,7 @@ for i in 2 3 4 5; do
 done
 ```
 
-## 8. よくある問題
+## 9. よくある問題
 
 ### `missing: .../group_vars/all.yml`
 
@@ -174,7 +231,7 @@ SSH秘密鍵を配置するか、まだ作成していなければ「2. SSH鍵�
 
 ### `Permission denied (publickey)`
 
-`secret.auto.tfvars` の `server_ssh_public_key_path` が正しいか確認します。VM作成後に値を変更しただけでは既存VMへ鍵は追加されないため、「7. SSH公開鍵をVM作成後に追加する」を実行します。
+`secret.auto.tfvars` の `server_ssh_public_key_path` が正しいか確認します。VM作成後に値を変更しただけでは既存VMへ鍵は追加されないため、「8. SSH公開鍵をVM作成後に追加する」を実行します。
 
 ### DBへ接続できない
 
