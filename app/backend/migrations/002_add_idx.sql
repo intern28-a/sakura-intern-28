@@ -13,7 +13,7 @@ CREATE INDEX LIKES_CREATED_AT_INDEX ON likes (created_at);
 
 CREATE INDEX FOOTPRINTS_USER_ID_INDEX ON footprints (user_id);
 
--- notifications.user_idは複合インデックスで代用可能なのでインデックスはらない
+-- notifications.user_id の単体インデックスは複合インデックスで代用可能なので貼らない
 CREATE INDEX NOTIFICATIONS_USER_ID_IS_READ_INDEX ON notifications (user_id, is_read);
 
 -- posts.content, users.username, users.display_nameは、FULLTEXT INDEXを貼るとテーブル自体がかなり重くなると思ったので貼らなかった
