@@ -12,12 +12,11 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	feed := r.URL.Query().Get("feed")
 
 	var rows *sql.Rows
+	var totalRow *sql.Row
 	var err error
 
 	// 返信（parent_post_id あり）はスレッド画面でのみ表示するためタイムラインから除く
 	switch feed {
-	// 一覧クエリでは ID だけを引き、本体はまとめて取得する。
-	// posts(parent_post_id, created_at, id) のインデックスがあればカバリングインデックスになる。
 	case "latest":
 		rows, err = h.DB.QueryContext(r.Context(), `
 			SELECT id
@@ -26,6 +25,9 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 			ORDER BY created_at DESC, id DESC
 			LIMIT ? OFFSET ?
 		`, perPage, offset)
+		totalRow = h.DB.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM posts WHERE parent_post_id IS NULL`,
+		)
 	case "recommended":
 		rows, err = h.DB.QueryContext(r.Context(), `
 			SELECT p.id
@@ -36,6 +38,9 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 			ORDER BY COUNT(l.post_id) DESC, p.created_at DESC, p.id DESC
 			LIMIT ? OFFSET ?
 		`, perPage, offset)
+		totalRow = h.DB.QueryRowContext(r.Context(),
+			`SELECT COUNT(*) FROM posts WHERE parent_post_id IS NULL`,
+		)
 	default: // "following"
 		rows, err = h.DB.QueryContext(r.Context(), `
 			SELECT id
@@ -47,6 +52,13 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 			ORDER BY created_at DESC, id DESC
 			LIMIT ? OFFSET ?
 		`, myID, perPage, offset)
+		totalRow = h.DB.QueryRowContext(r.Context(), `
+			SELECT COUNT(*) FROM posts
+			WHERE parent_post_id IS NULL
+			  AND user_id IN (
+				SELECT followee_id FROM follows WHERE follower_id = ?
+			)
+		`, myID)
 	}
 	if err != nil {
 		h.respondError(w, http.StatusInternalServerError, "server error")
@@ -81,19 +93,8 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var total int
-	switch feed {
-	case "latest", "recommended":
-		h.DB.QueryRowContext(r.Context(),
-			`SELECT COUNT(*) FROM posts WHERE parent_post_id IS NULL`,
-		).Scan(&total)
-	default: // "following"
-		h.DB.QueryRowContext(r.Context(), `
-			SELECT COUNT(*) FROM posts
-			WHERE parent_post_id IS NULL
-			  AND user_id IN (
-				SELECT followee_id FROM follows WHERE follower_id = ?
-			)
-		`, myID).Scan(&total)
+	if totalRow != nil {
+		totalRow.Scan(&total)
 	}
 
 	h.respondJSON(w, http.StatusOK, map[string]any{
