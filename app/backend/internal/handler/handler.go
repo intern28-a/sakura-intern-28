@@ -87,38 +87,69 @@ func uniqueIDs(ids []int64) []int64 {
 	return out
 }
 
-// fetchUser は users テーブルから1件取得する
-func (h *Handler) fetchUser(r *http.Request, userID int64) (model.User, error) {
-	var u model.User
-	err := h.DB.QueryRowContext(r.Context(),
-		`SELECT id, username, display_name, bio, created_at FROM users WHERE id = ?`,
-		userID,
-	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Bio, &u.CreatedAt)
+////////////////////////////////////////////////////////////////////////////
+// ユーザー
+////////////////////////////////////////////////////////////////////////////
+
+// fetchUsersByIDs は複数ユーザーを1クエリでまとめて取得する。
+// フォロワー数・フォロー数・投稿数・フォロー済みかどうかも同じクエリで解決するため、
+// ユーザー1人あたり5クエリ発行していたものが全体で1クエリになる。
+func (h *Handler) fetchUsersByIDs(r *http.Request, ids []int64) (map[int64]model.User, error) {
+	ids = uniqueIDs(ids)
+	out := make(map[int64]model.User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	viewerID, _ := h.currentUserID(r)
+
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, viewerID)
+	args = append(args, idArgs(ids)...)
+
+	rows, err := h.DB.QueryContext(r.Context(), `
+		SELECT u.id, u.username, u.display_name, u.bio, u.created_at,
+		       (SELECT COUNT(*) FROM follows f1 WHERE f1.followee_id = u.id) AS followers_count,
+		       (SELECT COUNT(*) FROM follows f2 WHERE f2.follower_id = u.id) AS following_count,
+		       (SELECT COUNT(*) FROM posts   p  WHERE p.user_id     = u.id) AS post_count,
+		       EXISTS(SELECT 1 FROM follows f3
+		              WHERE f3.follower_id = ? AND f3.followee_id = u.id) AS followed_by_me
+		FROM users u
+		WHERE u.id IN (`+placeholders(len(ids))+`)
+	`, args...)
 	if err != nil {
-		return u, err
+		return nil, err
 	}
-	u.AvatarColor = model.AvatarColor(u.ID)
+	defer rows.Close()
 
-	// フォロワー数・フォロー数・投稿数を取得
-	h.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM follows WHERE followee_id = ?`, u.ID,
-	).Scan(&u.FollowersCount)
-
-	h.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM follows WHERE follower_id = ?`, u.ID,
-	).Scan(&u.FollowingCount)
-
-	h.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM posts WHERE user_id = ?`, u.ID,
-	).Scan(&u.PostCount)
-
-	if viewerID, ok := h.currentUserID(r); ok && viewerID != u.ID {
-		h.DB.QueryRowContext(r.Context(),
-			`SELECT EXISTS(SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?)`,
-			viewerID, u.ID,
-		).Scan(&u.FollowedByMe)
+	for rows.Next() {
+		var u model.User
+		if err := rows.Scan(
+			&u.ID, &u.Username, &u.DisplayName, &u.Bio, &u.CreatedAt,
+			&u.FollowersCount, &u.FollowingCount, &u.PostCount, &u.FollowedByMe,
+		); err != nil {
+			return nil, err
+		}
+		u.AvatarColor = model.AvatarColor(u.ID)
+		// 自分自身に対しては followed_by_me を立てない（従来の挙動に合わせる）
+		if u.ID == viewerID {
+			u.FollowedByMe = false
+		}
+		out[u.ID] = u
 	}
+	return out, rows.Err()
+}
 
+// fetchUser は users テーブルから1件取得する。中身は一括取得の1件版。
+func (h *Handler) fetchUser(r *http.Request, userID int64) (model.User, error) {
+	users, err := h.fetchUsersByIDs(r, []int64{userID})
+	if err != nil {
+		return model.User{}, err
+	}
+	u, ok := users[userID]
+	if !ok {
+		return model.User{}, sql.ErrNoRows
+	}
 	return u, nil
 }
 

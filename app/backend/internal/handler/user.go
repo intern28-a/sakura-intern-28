@@ -90,19 +90,27 @@ func (h *Handler) GetFollowers(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var followerID int64
-		rows.Scan(&followerID)
+		if err := rows.Scan(&followerID); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		ids = append(ids, followerID)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
-	var users []any
+	fetched, err := h.fetchUsersByIDs(r, ids)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	users := make([]any, 0, len(ids))
 	for _, id := range ids {
-		u, err := h.fetchUser(r, id)
-		if err == nil {
+		if u, ok := fetched[id]; ok {
 			users = append(users, u)
 		}
-	}
-	if users == nil {
-		users = []any{}
 	}
 	h.respondJSON(w, http.StatusOK, map[string]any{"users": users, "total": len(users)})
 }
@@ -126,19 +134,27 @@ func (h *Handler) GetFollowing(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var followeeID int64
-		rows.Scan(&followeeID)
+		if err := rows.Scan(&followeeID); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		ids = append(ids, followeeID)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
-	var users []any
+	fetched, err := h.fetchUsersByIDs(r, ids)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	users := make([]any, 0, len(ids))
 	for _, id := range ids {
-		u, err := h.fetchUser(r, id)
-		if err == nil {
+		if u, ok := fetched[id]; ok {
 			users = append(users, u)
 		}
-	}
-	if users == nil {
-		users = []any{}
 	}
 	h.respondJSON(w, http.StatusOK, map[string]any{"users": users, "total": len(users)})
 }

@@ -87,14 +87,25 @@ func (h *Handler) searchUsers(w http.ResponseWriter, r *http.Request, q string, 
 	userIDs := make([]int64, 0)
 	for rows.Next() {
 		var uid int64
-		rows.Scan(&uid)
+		if err := rows.Scan(&uid); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		userIDs = append(userIDs, uid)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
+	fetched, err := h.fetchUsersByIDs(r, userIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	users := make([]any, 0, len(userIDs))
 	for _, uid := range userIDs {
-		u, err := h.fetchUser(r, uid)
-		if err == nil {
+		if u, ok := fetched[uid]; ok {
 			users = append(users, u)
 		}
 	}
