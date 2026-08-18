@@ -16,9 +16,11 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 	// 返信（parent_post_id あり）はスレッド画面でのみ表示するためタイムラインから除く
 	switch feed {
+	// 一覧クエリでは ID だけを引く。
+	// posts(parent_post_id, created_at, id) のインデックスがあればカバリングインデックスになる。
 	case "latest":
 		rows, err = h.DB.QueryContext(r.Context(), `
-			SELECT id, user_id, content, is_repost, original_post_id, created_at
+			SELECT id
 			FROM posts
 			WHERE parent_post_id IS NULL
 			ORDER BY created_at DESC, id DESC
@@ -26,7 +28,7 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		`, perPage, offset)
 	case "recommended":
 		rows, err = h.DB.QueryContext(r.Context(), `
-			SELECT p.id, p.user_id, p.content, p.is_repost, p.original_post_id, p.created_at
+			SELECT p.id
 			FROM posts p
 			LEFT JOIN likes l ON l.post_id = p.id AND l.created_at > NOW() - INTERVAL 24 HOUR
 			WHERE p.parent_post_id IS NULL
@@ -36,7 +38,7 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		`, perPage, offset)
 	default: // "following"
 		rows, err = h.DB.QueryContext(r.Context(), `
-			SELECT id, user_id, content, is_repost, original_post_id, created_at
+			SELECT id
 			FROM posts
 			WHERE parent_post_id IS NULL
 			  AND user_id IN (
@@ -52,21 +54,23 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type postRow struct {
-		id     int64
-		userID int64
-	}
-	var rawPosts []postRow
+	var ids []int64
 	for rows.Next() {
-		var p postRow
-		var dummy any // content, is_repost, original_post_id, created_at
-		rows.Scan(&p.id, &p.userID, &dummy, &dummy, &dummy, &dummy)
-		rawPosts = append(rawPosts, p)
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
 	}
 
-	posts := make([]any, 0, len(rawPosts))
-	for _, rp := range rawPosts {
-		p, err := h.fetchPost(r, rp.id, myID)
+	posts := make([]any, 0, len(ids))
+	for _, id := range ids {
+		p, err := h.fetchPost(r, id, myID)
 		if err == nil {
 			posts = append(posts, p)
 		}
