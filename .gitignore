@@ -1,0 +1,8 @@
+# Terraform の state / ローカル作業ディレクトリはリポジトリ全体で追跡しない
+# (infra/ 配下の詳細なルールは infra/.gitignore を参照)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# compose の DB 接続情報 (アプライアンスの認証情報を含む)
+.env

@@ -63,18 +63,203 @@ write_files:
     content: |
       #!/bin/sh
       set -eu
-      public_if="$(ip route show default | awk '{print $5; exit}')"
+
+      # configure-nic.sh の netplan apply 直後はデフォルトルートが一時的に
+      # 消えるため、ここで待たないと $public_if が空になり
+      # "iptables: Empty interface is likely to be undesired" で失敗する。
+      # set -e と相まってスクリプトごと中断するので、確定するまで待つ。
+      i=0
+      while :; do
+        public_if="$(ip route show default | awk '{print $5; exit}')"
+        if [ -n "$public_if" ]; then
+          break
+        fi
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+          echo "default route not found after 60s" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+
       sysctl -w net.ipv4.ip_forward=1
       echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-nat.conf
       iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
         || iptables -t nat -A POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE
+
+      # VIP は app セグメント内のプライベートアドレスで、このスイッチにはルータが無い。
+      # グローバルIPを持つのはこのノードだけなので、外部から来た :${dsr_lb_port} を
+      # DSR ロードバランサの VIP へ転送する入口もここが兼ねる。
+      # 戻りは実サーバ → default gw (このノード) と返り、conntrack が DNAT を
+      # 逆変換するため SNAT は不要 (established は nat チェーンを通らないので
+      # 上の MASQUERADE も二重には効かない)。
+      iptables -t nat -C PREROUTING -i "$public_if" -p tcp --dport ${dsr_lb_port} -j DNAT --to-destination ${dsr_lb_vip}:${dsr_lb_port} 2>/dev/null \
+        || iptables -t nat -A PREROUTING -i "$public_if" -p tcp --dport ${dsr_lb_port} -j DNAT --to-destination ${dsr_lb_vip}:${dsr_lb_port}
+
+      # 再起動後もルールを残す
       echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
       echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
       DEBIAN_FRONTEND=noninteractive apt-get update
       DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
       netfilter-persistent save
-%{ endif ~}
 
+  - path: /usr/local/bin/setup-forward.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Docker は起動時に FORWARD の既定ポリシーを DROP にする。そのままだと
+      #   - 外部 → このノードの DNAT → VIP  (共有セグメント → app セグメント)
+      #   - node-02〜05 の NAT 経由の外部通信 (app セグメント → 共有セグメント)
+      # の2つが落ちる。setup-nat.sh は Docker インストール前に走るので、
+      # そちらでは対処できない (DOCKER-USER チェーンがまだ存在しない)。
+      #
+      # DOCKER-USER は Docker が作るが中身は触らないチェーンなので、
+      # ここに許可を置けば docker の再起動でも消えない。
+      set -eu
+
+      # configure-nic.sh の netplan apply 直後はデフォルトルートが一時的に
+      # 消えるため、ここで待たないと $public_if が空になり
+      # "iptables: Empty interface is likely to be undesired" で失敗する。
+      # set -e と相まってスクリプトごと中断するので、確定するまで待つ。
+      i=0
+      while :; do
+        public_if="$(ip route show default | awk '{print $5; exit}')"
+        if [ -n "$public_if" ]; then
+          break
+        fi
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+          echo "default route not found after 60s" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+
+      private_if="$(ip -o route show ${private_cidr} | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+
+      if [ -z "$private_if" ]; then
+        echo "private interface not found" >&2
+        exit 1
+      fi
+
+      # Docker がまだチェーンを作っていない場合に備える
+      iptables -N DOCKER-USER 2>/dev/null || true
+      iptables -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -I FORWARD -j DOCKER-USER
+
+      # -C で存在を確認してから追加するので、再実行してもルールが重複しない
+      iptables -C DOCKER-USER -i "$public_if" -o "$private_if" -j ACCEPT 2>/dev/null \
+        || iptables -I DOCKER-USER -i "$public_if" -o "$private_if" -j ACCEPT
+      iptables -C DOCKER-USER -i "$private_if" -o "$public_if" -j ACCEPT 2>/dev/null \
+        || iptables -I DOCKER-USER -i "$private_if" -o "$public_if" -j ACCEPT
+
+  - path: /etc/systemd/system/dsr-forward.service
+    content: |
+      [Unit]
+      # 毎回 Docker の後に流し直す。netfilter-persistent で保存すると
+      # Docker 自身のルールまで復元されて起動時に競合するため、
+      # 永続化ではなく boot ごとの再適用にしている。
+      Description=Allow forwarding between shared and app segments
+      After=docker.service
+      Wants=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/setup-forward.sh
+
+      [Install]
+      WantedBy=multi-user.target
+
+%{ endif ~}
+%{ if !is_gateway ~}
+  # ------------------------------------------------------------------
+  # DSR ロードバランサの実サーバ設定 (node-02〜05)
+  # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
+  # ------------------------------------------------------------------
+  - path: /etc/sysctl.d/99-dsr.conf
+    content: |
+      # lo に付けた VIP でも、Linux は既定で ethernet 側から ARP 応答してしまう。
+      # 抑止しないと VIP の ARP に実サーバが答え、ロードバランサを素通りして
+      # 特定の1台に固定される (分散しているように見えて分散していない状態)。
+      # カーネルは max(all, インターフェース個別) を採用するので all だけで足りる。
+      net.ipv4.conf.all.arp_ignore = 1
+      net.ipv4.conf.all.arp_announce = 2
+
+  - path: /etc/systemd/system/dsr-vip.service
+    content: |
+      [Unit]
+      # DSR では宛先IPが VIP のまま届くため、VIP を自分のアドレスとして
+      # 持っていないとパケットを破棄してしまう。
+      # また Docker の PREROUTING は `-m addrtype --dst-type LOCAL -j DOCKER` で
+      # 条件付けされているので、VIP がローカル扱いにならないと公開ポートの
+      # DNAT も発火しない。
+      Description=Assign DSR loadbalancer VIP to loopback
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      # replace なので再実行しても重複しない
+      ExecStart=/usr/sbin/ip addr replace ${dsr_lb_vip}/32 dev lo
+      ExecStop=-/usr/sbin/ip addr del ${dsr_lb_vip}/32 dev lo
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/dsr-echo-server.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      # TODO: 分散の動作確認用の仮リスナー。本物の api ではない。
+      # DB アプライアンスへのスキーマ投入が済んだら compose.reg.yml の api
+      # コンテナに置き換え、dsr-echo.service は停止・無効化する。
+      #
+      # ホスト名を返すので、edge から
+      #   for i in $(seq 20); do curl -s http://${dsr_lb_vip}:${dsr_lb_port}; echo; done
+      # を回すと node-02〜05 にばらけているかがそのまま見える。
+      #
+      # ヘルスチェックは実サーバIP (192.168.1.12 等) の :${dsr_lb_port} に、
+      # 振り分けられた通信は VIP (${dsr_lb_vip}) の :${dsr_lb_port} に届くので、
+      # 0.0.0.0 で待ち受けて両方を受ける。
+      import http.server
+      import socket
+
+      BODY = socket.gethostname().encode() + b"\n"
+
+
+      class Handler(http.server.BaseHTTPRequestHandler):
+          # パスに関わらず 200 を返す (ヘルスチェックを http に切り替えても通るように)
+          def do_GET(self):
+              self.send_response(200)
+              self.send_header("Content-Type", "text/plain")
+              self.send_header("Content-Length", str(len(BODY)))
+              self.end_headers()
+              self.wfile.write(BODY)
+
+          def log_message(self, *args):
+              pass
+
+
+      if __name__ == "__main__":
+          http.server.ThreadingHTTPServer(("0.0.0.0", ${dsr_lb_port}), Handler).serve_forever()
+
+  - path: /etc/systemd/system/dsr-echo.service
+    content: |
+      [Unit]
+      Description=Temporary :${dsr_lb_port} listener for DSR loadbalancer verification
+      After=network-online.target dsr-vip.service
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 /usr/local/bin/dsr-echo-server.py
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+%{ endif ~}
   - path: /usr/local/bin/wait-for-internet.sh
     permissions: '0755'
     content: |
@@ -93,6 +278,14 @@ write_files:
 
 runcmd:
   - /usr/local/bin/configure-nic.sh
+%{ if !is_gateway ~}
+  # ARP 抑止を先に効かせてから VIP を付ける。逆順だと VIP を付けた瞬間から
+  # ARP 応答してしまう窓ができる。
+  - sysctl --system
+  - systemctl daemon-reload
+  - systemctl enable --now dsr-vip.service
+  - systemctl enable --now dsr-echo.service
+%{ endif ~}
 %{ if is_gateway ~}
   - /usr/local/bin/setup-nat.sh
 %{ endif ~}
@@ -101,3 +294,8 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
   - usermod -aG docker ubuntu
+%{ if is_gateway ~}
+  # Docker が FORWARD を DROP にした後でないと DOCKER-USER チェーンが無い
+  - systemctl daemon-reload
+  - systemctl enable --now dsr-forward.service
+%{ endif ~}

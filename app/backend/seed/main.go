@@ -15,14 +15,21 @@ import (
 )
 
 const (
-	numUsers         = 500
+	numUsers         = 1000
 	numPosts         = 10000
 	numFollows       = 50000
 	numLikes         = 100000
 	numReposts       = 20000
 	numFootprints    = 20000
 	numNotifications = 20000
-	batchSize        = 1000
+	// 1 回の INSERT で扱う行数は大きくするが、MySQL のプレースホルダー上限を超えないよう
+	// その都度 rowsPerInsert を計算して制限する。
+	batchSize = 50000
+
+	// MySQL の prepared statement は 1 クエリあたりのプレースホルダー数に上限がある。
+	// ここでは安全マージンを残したうえで、各 INSERT の行数を自動調整する。
+	maxMySQLPlaceholders = 65535
+	placeholderHeadroom  = 2048
 
 	// 返信が付く投稿の割合
 	replyTargetRatio = 0.2
@@ -119,13 +126,29 @@ func main() {
 	log.Printf("=== 完了 (%.1f秒) ===", time.Since(start).Seconds())
 }
 
+func maxRowsPerInsert(columns int) int {
+	if columns <= 0 {
+		return batchSize
+	}
+	limit := maxMySQLPlaceholders - placeholderHeadroom
+	rows := limit / columns
+	if rows < 1 {
+		return 1
+	}
+	if rows > batchSize {
+		return batchSize
+	}
+	return rows
+}
+
 func insertUsers(db *sql.DB, rng *rand.Rand, n int) []int64 {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
 	hashStr := string(hash)
 
 	ids := make([]int64, 0, n)
-	for i := 0; i < n; i += batchSize {
-		end := i + batchSize
+	rowsPerInsert := maxRowsPerInsert(5)
+	for i := 0; i < n; i += rowsPerInsert {
+		end := i + rowsPerInsert
 		if end > n {
 			end = n
 		}
@@ -176,8 +199,9 @@ func insertUsers(db *sql.DB, rng *rand.Rand, n int) []int64 {
 
 func insertPosts(db *sql.DB, rng *rand.Rand, userIDs []int64, n int) []int64 {
 	ids := make([]int64, 0, n)
-	for i := 0; i < n; i += batchSize {
-		end := i + batchSize
+	rowsPerInsert := maxRowsPerInsert(2)
+	for i := 0; i < n; i += rowsPerInsert {
+		end := i + rowsPerInsert
 		if end > n {
 			end = n
 		}
@@ -296,8 +320,9 @@ func replyFanout(rng *rand.Rand) int {
 // 同じ投稿IDが複数回含まれていれば、その数だけ返信がぶら下がる。
 func insertReplyBatch(db *sql.DB, rng *rand.Rand, userIDs, targets []int64) []int64 {
 	ids := make([]int64, 0, len(targets))
-	for i := 0; i < len(targets); i += batchSize {
-		end := i + batchSize
+	rowsPerInsert := maxRowsPerInsert(3)
+	for i := 0; i < len(targets); i += rowsPerInsert {
+		end := i + rowsPerInsert
 		if end > len(targets) {
 			end = len(targets)
 		}
@@ -343,9 +368,10 @@ func insertReplyBatch(db *sql.DB, rng *rand.Rand, userIDs, targets []int64) []in
 func insertFollows(db *sql.DB, rng *rand.Rand, userIDs []int64, n int) {
 	seen := make(map[[2]int64]bool, n)
 	inserted := 0
+	rowsPerInsert := maxRowsPerInsert(2)
 
 	for inserted < n {
-		batchEnd := inserted + batchSize
+		batchEnd := inserted + rowsPerInsert
 		if batchEnd > n {
 			batchEnd = n
 		}
@@ -384,11 +410,18 @@ func insertFollows(db *sql.DB, rng *rand.Rand, userIDs []int64, n int) {
 }
 
 func insertLikes(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
-	seen := make(map[[2]int64]bool, n)
+	if len(userIDs) == 0 || len(postIDs) == 0 {
+		return
+	}
+	if n > len(userIDs)*len(postIDs) {
+		n = len(userIDs) * len(postIDs)
+	}
+
 	inserted := 0
+	rowsPerInsert := maxRowsPerInsert(2)
 
 	for inserted < n {
-		batchEnd := inserted + batchSize
+		batchEnd := inserted + rowsPerInsert
 		if batchEnd > n {
 			batchEnd = n
 		}
@@ -396,18 +429,14 @@ func insertLikes(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
 
 		vals := make([]string, 0, count)
 		args := make([]any, 0, count*2)
-		added := 0
-		for added < count {
-			uid := userIDs[rng.Intn(len(userIDs))]
-			pid := postIDs[rng.Intn(len(postIDs))]
-			key := [2]int64{uid, pid}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
+		for j := 0; j < count; j++ {
+			pairIndex := inserted + j
+			uidIdx := pairIndex / len(postIDs)
+			pidIdx := pairIndex % len(postIDs)
+			uid := userIDs[uidIdx]
+			pid := postIDs[pidIdx]
 			vals = append(vals, "(?,?)")
 			args = append(args, uid, pid)
-			added++
 		}
 
 		query := "INSERT INTO likes (user_id, post_id) VALUES " +
@@ -416,7 +445,7 @@ func insertLikes(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
 		if _, err := db.Exec(query, args...); err != nil {
 			log.Fatal("likes insert:", err)
 		}
-		inserted += added
+		inserted += count
 		if inserted%(batchSize*20) == 0 {
 			log.Printf("  likes: %d/%d", inserted, n)
 		}
@@ -424,11 +453,18 @@ func insertLikes(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
 }
 
 func insertReposts(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
-	seen := make(map[[2]int64]bool, n)
+	if len(userIDs) == 0 || len(postIDs) == 0 {
+		return
+	}
+	if n > len(userIDs)*len(postIDs) {
+		n = len(userIDs) * len(postIDs)
+	}
+
 	inserted := 0
+	rowsPerInsert := maxRowsPerInsert(2)
 
 	for inserted < n {
-		batchEnd := inserted + batchSize
+		batchEnd := inserted + rowsPerInsert
 		if batchEnd > n {
 			batchEnd = n
 		}
@@ -436,18 +472,14 @@ func insertReposts(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) 
 
 		vals := make([]string, 0, count)
 		args := make([]any, 0, count*2)
-		added := 0
-		for added < count {
-			uid := userIDs[rng.Intn(len(userIDs))]
-			pid := postIDs[rng.Intn(len(postIDs))]
-			key := [2]int64{uid, pid}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
+		for j := 0; j < count; j++ {
+			pairIndex := inserted + j
+			uidIdx := pairIndex / len(postIDs)
+			pidIdx := pairIndex % len(postIDs)
+			uid := userIDs[uidIdx]
+			pid := postIDs[pidIdx]
 			vals = append(vals, "(?,?)")
 			args = append(args, uid, pid)
-			added++
 		}
 
 		query := "INSERT INTO reposts (user_id, post_id) VALUES " +
@@ -456,7 +488,7 @@ func insertReposts(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) 
 		if _, err := db.Exec(query, args...); err != nil {
 			log.Fatal("reposts insert:", err)
 		}
-		inserted += added
+		inserted += count
 		if inserted%(batchSize*10) == 0 {
 			log.Printf("  reposts: %d/%d", inserted, n)
 		}
@@ -479,8 +511,9 @@ func pickOther(rng *rand.Rand, userIDs []int64, base int64) int64 {
 
 func insertFootprints(db *sql.DB, rng *rand.Rand, userIDs []int64, n int) {
 	inserted := 0
+	rowsPerInsert := maxRowsPerInsert(2)
 	for inserted < n {
-		end := inserted + batchSize
+		end := inserted + rowsPerInsert
 		if end > n {
 			end = n
 		}
@@ -510,8 +543,9 @@ var notifTypes = []string{"like", "follow", "repost", "footprint"}
 
 func insertNotifications(db *sql.DB, rng *rand.Rand, userIDs, postIDs []int64, n int) {
 	inserted := 0
+	rowsPerInsert := maxRowsPerInsert(4)
 	for inserted < n {
-		end := inserted + batchSize
+		end := inserted + rowsPerInsert
 		if end > n {
 			end = n
 		}

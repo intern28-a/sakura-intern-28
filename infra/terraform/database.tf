@@ -5,10 +5,10 @@
 # database_version は MariaDB = "10.11" (アプリの docker-compose と揃える)。
 #
 # NOTE: app セグメントにはルータが無いため、デフォルトゲートウェイには
-#       NAT ゲートウェイを兼ねる node-01 のプライベートIPを指定する。
+#       NAT ゲートウェイを兼ねる edge のプライベートIPを指定する。
 
 resource "sakura_database" "db" {
-  name = "intern2026-db"
+  name = "db"
   zone = var.zone
 
   database_type    = "mariadb"

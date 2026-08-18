@@ -8,7 +8,8 @@ CREATE INDEX IF NOT EXISTS FOLLOWS_FOLLOWEE_FOLLOWER_ID_INDEX ON follows (follow
 
 -- likes.user_id, likes.post_id は (user_id, post_id) の複合主キーだが、post_id 単体検索があるためインデックスを貼る
 CREATE INDEX IF NOT EXISTS LIKES_POST_ID_USER_ID_INDEX ON likes (post_id, user_id);
-CREATE INDEX IF NOT EXISTS LIKES_CREATED_AT_INDEX ON likes (created_at);
+-- トレンドは「直近1時間で集計」するので created_at を先頭にした複合インデックスが重要
+CREATE INDEX IF NOT EXISTS LIKES_CREATED_AT_POST_ID_INDEX ON likes (created_at, post_id);
 
 CREATE INDEX IF NOT EXISTS FOOTPRINTS_USER_ID_INDEX ON footprints (user_id);
 

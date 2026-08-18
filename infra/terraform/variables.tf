@@ -35,7 +35,7 @@ variable "app_net_cidr" {
 }
 
 variable "node_ip_offset" {
-  description = "app セグメント内でノードに割り当てるホスト番号の開始値。node-01 が .11 になる。"
+  description = "app セグメント内でノードに割り当てるホスト番号の開始値。先頭ノード (edge) が .11 になる。"
   type        = number
   default     = 11
 }
@@ -50,8 +50,8 @@ variable "db_ip_offset" {
 # サーバー
 ########################################
 # 5台とも同一スペックの汎用ノード。役割 (LB / App / DB) は構築後に決める。
-# グローバルIP (共有セグメント) を持つのは node-01 のみで、
-# node-02〜05 は node-01 の NAT 経由で外部へ出る。
+# グローバルIP (共有セグメント) を持つのは先頭の edge のみで、
+# node-02〜05 は edge の NAT 経由で外部へ出る。
 
 variable "node_count" {
   description = "作成するサーバーの台数。"
@@ -60,9 +60,18 @@ variable "node_count" {
 }
 
 variable "node_name_prefix" {
-  description = "サーバー名の接頭辞。node-01 … node-05 のように連番が付く。"
+  description = "2台目以降のサーバー名の接頭辞。node-02 … node-05 のように連番が付く。"
   type        = string
   default     = "node"
+}
+
+variable "edge_node_name" {
+  description = <<-EOT
+    先頭ノードの名前。この1台だけがグローバルIPを持ち、踏み台・NAT ゲートウェイ・
+    外部から VIP への DNAT 入口を兼ねるため、他の汎用ノードとは別の名前を付ける。
+  EOT
+  type        = string
+  default     = "edge"
 }
 
 variable "server_core" {
@@ -147,4 +156,50 @@ variable "db_parameters" {
   EOT
   type        = map(string)
   default     = {}
+}
+
+########################################
+# DSR ロードバランサ
+########################################
+
+variable "dsr_lb_plan" {
+  description = "DSR ロードバランサのプラン。standard / highspec のいずれか。"
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "highspec"], var.dsr_lb_plan)
+    error_message = "dsr_lb_plan は standard か highspec のいずれかを指定してください。"
+  }
+}
+
+variable "dsr_lb_ip_offset" {
+  description = "app セグメント内で DSR ロードバランサ本体に割り当てるホスト番号。"
+  type        = number
+  default     = 40
+}
+
+variable "dsr_lb_vip_offset" {
+  description = <<-EOT
+    app セグメント内で VIP に割り当てるホスト番号。
+    DSR 方式のため、実サーバ (node-02〜05) 側でもこのアドレスを
+    ループバックに割り当てる必要がある。
+  EOT
+  type        = number
+  default     = 50
+}
+
+variable "dsr_lb_vrid" {
+  description = "DSR ロードバランサの VRID。同一セグメント内で重複しない値にする。"
+  type        = number
+  default     = 1
+}
+
+variable "dsr_lb_port" {
+  description = <<-EOT
+    VIP で待ち受けるポート番号。DSR 方式ではポート変換が行われないため、
+    実サーバも同じポートで待ち受ける必要がある。api コンテナは 8080。
+  EOT
+  type        = number
+  default     = 8080
 }

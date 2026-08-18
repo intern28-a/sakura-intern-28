@@ -1,5 +1,5 @@
 ---
-registry_host: intern.sakuracr.jp
+registry_host: intern-fuga.sakuracr.jp
 api_url: http://localhost:8080
 
 # Terraform で作成したマネージド DB

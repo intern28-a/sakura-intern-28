@@ -1,5 +1,5 @@
 output "bastion_public_ip" {
-  description = "node-01 のグローバルIP。5台のうちここだけが共有セグメントに接続している。"
+  description = "edge のグローバルIP。5台のうちここだけが共有セグメントに接続している。"
   value       = sakura_server.node[0].ip_address
 }
 
@@ -16,7 +16,7 @@ output "db_host" {
 }
 
 output "ssh_commands" {
-  description = "各ノードへの SSH コマンド。node-02 以降は node-01 を踏み台にする。"
+  description = "各ノードへの SSH コマンド。node-02 以降は edge を踏み台にする。"
   value = {
     for i, s in sakura_server.node : s.name => (
       i == 0
@@ -29,4 +29,22 @@ output "ssh_commands" {
 output "switch_id" {
   description = "全ノードが接続する app セグメントの vSwitch ID。"
   value       = sakura_vswitch.app.id
+}
+
+output "dsr_lb_vip" {
+  description = <<-EOT
+    DSR ロードバランサの VIP。api (:8080) はこのアドレス経由で node-02〜05 へ振り分けられる。
+    app セグメント内のプライベートアドレスなので、外部からはそのまま到達できない。
+  EOT
+  value       = local.dsr_lb_vip
+}
+
+output "dsr_lb_private_ip" {
+  description = "DSR ロードバランサ本体の app セグメント上のアドレス。"
+  value       = local.dsr_lb_private_ip
+}
+
+output "dsr_lb_real_server_ips" {
+  description = "DSR ロードバランサの振り分け先 (node-02〜05)。"
+  value       = local.dsr_lb_real_server_ips
 }
