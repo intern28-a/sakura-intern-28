@@ -8,10 +8,32 @@
   tasks:
     - name: Wait for cloud-init apt operations to finish
       ansible.builtin.shell: |
-        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
-          sleep 5
+        for attempt in $(seq 1 120); do
+          if fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1 \
+            || systemctl is-active --quiet apt-daily.service \
+            || systemctl is-active --quiet apt-daily-upgrade.service; then
+            sleep 5
+          else
+            exit 0
+          fi
         done
+        echo "timed out waiting for apt locks" >&2
+        exit 1
       changed_when: false
+
+    - name: Apply database migrations from node-01
+      ansible.builtin.command:
+        cmd: bash /opt/sakuravel-ansible/scripts/run-migrations.sh
+      environment:
+        DB_HOST: "{{ db_host }}"
+        DB_PORT: "{{ db_port | string }}"
+        DB_USER: "{{ db_user }}"
+        DB_NAME: "{{ db_name }}"
+        DB_PASSWORD: "{{ db_password }}"
+        MIGRATIONS_DIR: /opt/sakuravel-ansible/migrations
+      delegate_to: localhost
+      run_once: true
+      no_log: true
 
     - name: Install Docker when it is not already installed
       ansible.builtin.shell: bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'

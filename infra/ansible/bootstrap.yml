@@ -31,6 +31,7 @@
           - ansible-core
           - git
           - openssh-client
+          - mariadb-client
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -101,6 +102,8 @@
         mode: '0755'
       loop:
         - group_vars
+        - migrations
+        - scripts
         - templates
 
     - name: Copy controller files to node-01
@@ -117,6 +120,9 @@
         - { src: "{{ playbook_dir }}/templates/compose.yml.j2", dest: "templates/compose.yml.j2" }
         - { src: "{{ playbook_dir }}/templates/all.yml.j2", dest: "templates/all.yml.j2" }
         - { src: "{{ playbook_dir }}/group_vars/all.yml", dest: "group_vars/all.yml" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/001_init.sql", dest: "migrations/001_init.sql" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
+        - { src: "{{ playbook_dir }}/scripts/run-migrations.sh", dest: "scripts/run-migrations.sh" }
 
     - name: Render private inventory for node-01
       ansible.builtin.template:
