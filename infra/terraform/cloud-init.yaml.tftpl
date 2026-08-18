@@ -10,39 +10,106 @@ ssh_authorized_keys:
   - ${ssh_public_key}
 %{ endif ~}
 
-package_update: true
-package_upgrade: true
+# node-01 の NAT が立ち上がるまで node-02〜05 は外部へ出られない。
+# cloud-init 標準の apt 実行はその前に走ってしまうので無効化し、
+# runcmd 内で疎通を確認してから apt / docker を実行する。
+package_update: false
+package_upgrade: false
 
 write_files:
-  - path: /usr/local/bin/configure-private-nic.sh
+  - path: /usr/local/bin/configure-nic.sh
     permissions: '0755'
     content: |
       #!/bin/sh
       set -eu
 
-      public_if="$(ip route show default | awk '/default/ {print $5; exit}')"
+%{ if is_gateway ~}
+      # 共有セグメント側 (デフォルトルートを持つ NIC) を特定し、
+      # それ以外をプライベート NIC とみなす。
+      public_if="$(ip route show default | awk '{print $5; exit}')"
       private_if="$(ls /sys/class/net | grep -Ev '^(lo|docker0)$' | grep -vx "$public_if" | head -n1)"
+%{ else ~}
+      # プライベート専用ノード。NIC は app スイッチの1本だけ。
+      private_if="$(ls /sys/class/net | grep -Ev '^(lo|docker0)$' | head -n1)"
+%{ endif ~}
 
       if [ -z "$private_if" ]; then
         echo "private interface not found" >&2
         exit 1
       fi
 
-      cat >/etc/netplan/60-private-nic.yaml <<EOF
+      cat >/etc/netplan/60-private-nic.yaml <<NETPLAN
       network:
         version: 2
         ethernets:
           $${private_if}:
             dhcp4: false
             addresses:
-              - ${private_ip_cidr}
-      EOF
+              - ${private_ip}/${prefix_length}
+%{ if !is_gateway ~}
+            routes:
+              - to: default
+                via: ${gateway_ip}
+            nameservers:
+              addresses: [${join(", ", dns_servers)}]
+%{ endif ~}
+      NETPLAN
 
+      chmod 600 /etc/netplan/60-private-nic.yaml
       netplan apply
 
+%{ if is_gateway ~}
+  - path: /usr/local/bin/setup-nat.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # node-02〜05 はグローバルIPを持たないため、このノードが NAT ゲートウェイ
+      # として ${private_cidr} からの通信を共有セグメントへ出す。
+      set -eu
+
+      public_if="$(ip route show default | awk '{print $5; exit}')"
+
+      sysctl -w net.ipv4.ip_forward=1
+      echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-nat.conf
+
+      # -C で存在を確認してから追加するので、再実行してもルールが重複しない
+      iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE
+
+      # 再起動後もルールを残す
+      echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+      echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+      DEBIAN_FRONTEND=noninteractive apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+      netfilter-persistent save
+
+%{ endif ~}
+  - path: /usr/local/bin/wait-for-internet.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Terraform は5台を並列に作るため、node-01 の NAT より先に
+      # node-02〜05 が起動しうる。外部へ出られるようになるまでここで待つ。
+      # 10秒間隔で最大60回 = 10分。
+      i=0
+      until curl -fsS -m 5 -o /dev/null https://get.docker.com; do
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+          echo "no internet connectivity after 10 minutes" >&2
+          exit 1
+        fi
+        echo "waiting for internet connectivity via ${gateway_ip} ($i/60)"
+        sleep 10
+      done
+
 runcmd:
-  - /usr/local/bin/configure-private-nic.sh
-  # Docker EngineとCompose V2インストール
+  - /usr/local/bin/configure-nic.sh
+%{ if is_gateway ~}
+  - /usr/local/bin/setup-nat.sh
+%{ endif ~}
+  - /usr/local/bin/wait-for-internet.sh
+  # Docker Engine と Compose V2 のインストール
+  - DEBIAN_FRONTEND=noninteractive apt-get update
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
-  - usermod -a -G docker ubuntu
+  - usermod -aG docker ubuntu

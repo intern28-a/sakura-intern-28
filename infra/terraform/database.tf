@@ -2,8 +2,10 @@
 # データベースアプライアンス: intern2026-db
 ########################################
 # 冗長化・レプリケーションなし → replica_* は指定しない。
-# クローン元なし → 新規作成。
-# database_version は MariaDB = "10.11" (プロバイダー例・sacloud API が採用する現行版)。
+# database_version は MariaDB = "10.11" (アプリの docker-compose と揃える)。
+#
+# NOTE: app セグメントにはルータが無いため、デフォルトゲートウェイには
+#       NAT ゲートウェイを兼ねる node-01 のプライベートIPを指定する。
 
 resource "sakura_database" "db" {
   name = "intern2026-db"
@@ -11,19 +13,23 @@ resource "sakura_database" "db" {
 
   database_type    = "mariadb"
   database_version = "10.11"
-  plan             = "10g" # 10GB
+  plan             = var.db_plan
 
   username            = var.db_username
   password_wo         = var.db_password
   password_wo_version = 1
 
   network_interface = {
-    vswitch_id    = sakura_vswitch.private_net.id
-    ip_address    = element(split("/", var.db_private_net_cidr), 0)
-    netmask       = tonumber(element(split("/", var.db_private_net_cidr), 1))
-    gateway       = var.db_private_net_gateway
-    source_ranges = [var.db_private_net_allow_cidr]
+    vswitch_id    = sakura_vswitch.app.id
+    ip_address    = local.db_private_ip
+    netmask       = tonumber(local.app_prefix_length)
+    gateway       = local.gateway_private_ip
+    source_ranges = [local.app_net_cidr]
   }
+
+  # RDBMS 固有パラメータ。チューニング演習では var.db_parameters に
+  # max_connections / innodb_buffer_pool_size などを足してコード管理する。
+  parameters = var.db_parameters
 
   # 定期バックアップ: 毎日 03:00
   backup = {
