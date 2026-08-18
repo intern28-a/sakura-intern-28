@@ -30,14 +30,31 @@ func (h *Handler) GetTrending(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var t trendRow
 		var userID int64
-		rows.Scan(&t.postID, &userID, &t.recentLikes)
+		if err := rows.Scan(&t.postID, &userID, &t.recentLikes); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		rawTrends = append(rawTrends, t)
+	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	ids := make([]int64, 0, len(rawTrends))
+	for _, rt := range rawTrends {
+		ids = append(ids, rt.postID)
+	}
+	fetched, err := h.fetchPostsByIDs(r, ids, myID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
 	}
 
 	posts := make([]any, 0, len(rawTrends))
 	for _, rt := range rawTrends {
-		p, err := h.fetchPost(r, rt.postID, myID)
-		if err != nil {
+		p, ok := fetched[rt.postID]
+		if !ok {
 			continue
 		}
 		posts = append(posts, map[string]any{

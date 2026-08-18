@@ -16,7 +16,7 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 	// 返信（parent_post_id あり）はスレッド画面でのみ表示するためタイムラインから除く
 	switch feed {
-	// 一覧クエリでは ID だけを引く。
+	// 一覧クエリでは ID だけを引き、本体はまとめて取得する。
 	// posts(parent_post_id, created_at, id) のインデックスがあればカバリングインデックスになる。
 	case "latest":
 		rows, err = h.DB.QueryContext(r.Context(), `
@@ -68,10 +68,14 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fetched, err := h.fetchPostsByIDs(r, ids, myID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	posts := make([]any, 0, len(ids))
 	for _, id := range ids {
-		p, err := h.fetchPost(r, id, myID)
-		if err == nil {
+		if p, ok := fetched[id]; ok {
 			posts = append(posts, p)
 		}
 	}
@@ -161,14 +165,25 @@ func (h *Handler) GetUserPosts(w http.ResponseWriter, r *http.Request) {
 	var ids []int64
 	for rows.Next() {
 		var id int64
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
+	fetched, err := h.fetchPostsByIDs(r, ids, viewerID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	posts := make([]any, 0, len(ids))
 	for _, id := range ids {
-		p, err := h.fetchPost(r, id, viewerID)
-		if err == nil {
+		if p, ok := fetched[id]; ok {
 			posts = append(posts, p)
 		}
 	}
