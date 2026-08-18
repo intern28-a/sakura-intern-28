@@ -24,6 +24,10 @@ inventory.ini
 group_vars/all.yml
 group_vars/*.vault.yml
 group_vars/*.secret.yml
+ansible/inventory.ini
+ansible/group_vars/all.yml
+ansible/group_vars/*.vault.yml
+ansible/group_vars/*.secret.yml
 *.retry
 
 # Ignore override files as they are usually used to override resources locally and so
