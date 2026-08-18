@@ -389,20 +389,43 @@ func (h *Handler) childIDsByParent(r *http.Request, parentIDs []int64) (map[int6
 	return out, rows.Err()
 }
 
+// ancestorChain は startID から親をさかのぼった投稿ID列を、近い順（startID を先頭に含む）で返す。
+// 1件ずつ親を引くと最大 maxThreadDepth 回の逐次ラウンドトリップになるため、
+// 上向きの再帰CTEで1クエリにまとめている。
+func (h *Handler) ancestorChain(r *http.Request, startID int64) ([]int64, error) {
+	rows, err := h.DB.QueryContext(r.Context(), `
+		WITH RECURSIVE up AS (
+			SELECT id, parent_post_id, 1 AS depth FROM posts WHERE id = ?
+			UNION ALL
+			SELECT p.id, p.parent_post_id, up.depth + 1
+			FROM posts p JOIN up ON p.id = up.parent_post_id
+			WHERE up.depth < ?
+		)
+		SELECT id FROM up ORDER BY depth
+	`, startID, maxThreadDepth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]int64, 0, maxThreadDepth)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // threadRootID はスレッドの起点となる投稿IDを返す。
 func (h *Handler) threadRootID(r *http.Request, postID int64) int64 {
-	current := postID
-	for i := 0; i < maxThreadDepth; i++ {
-		var parent *int64
-		err := h.DB.QueryRowContext(r.Context(),
-			`SELECT parent_post_id FROM posts WHERE id = ?`, current,
-		).Scan(&parent)
-		if err != nil || parent == nil {
-			return current
-		}
-		current = *parent
+	chain, err := h.ancestorChain(r, postID)
+	if err != nil || len(chain) == 0 {
+		return postID
 	}
-	return current
+	return chain[len(chain)-1]
 }
 
 func pathID(r *http.Request, key string) (int64, error) {

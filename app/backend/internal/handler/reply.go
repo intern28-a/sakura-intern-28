@@ -107,17 +107,12 @@ func (h *Handler) GetThread(w http.ResponseWriter, r *http.Request) {
 
 // ancestorIDs は返信先をさかのぼった投稿ID列を近い順に返す。
 func (h *Handler) ancestorIDs(r *http.Request, parentID *int64) []int64 {
-	ids := make([]int64, 0)
-	current := parentID
-	for depth := 0; current != nil && depth < maxThreadDepth; depth++ {
-		ids = append(ids, *current)
-		var next *int64
-		if err := h.DB.QueryRowContext(r.Context(),
-			`SELECT parent_post_id FROM posts WHERE id = ?`, *current,
-		).Scan(&next); err != nil {
-			break
-		}
-		current = next
+	if parentID == nil {
+		return []int64{}
+	}
+	ids, err := h.ancestorChain(r, *parentID)
+	if err != nil {
+		return []int64{}
 	}
 	return ids
 }
