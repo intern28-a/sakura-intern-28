@@ -8,6 +8,7 @@ import (
 	"sakuravel/internal/model"
 	"sakuravel/internal/realtime"
 	"strconv"
+	"strings"
 )
 
 type Handler struct {
@@ -46,6 +47,44 @@ func (h *Handler) pagination(r *http.Request) (page, perPage, offset int) {
 	}
 	offset = (page - 1) * perPage
 	return
+}
+
+// maxThreadDepth はスレッドを辿る深さの上限（循環や極端に深いスレッドの保険）。
+const maxThreadDepth = 50
+
+////////////////////////////////////////////////////////////////////////////
+// 一括取得のための小道具
+////////////////////////////////////////////////////////////////////////////
+
+// placeholders は "?,?,?" のようなプレースホルダ列を組み立てる。
+func placeholders(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// idArgs は ID 列を QueryContext の可変長引数に変換する。
+func idArgs(ids []int64) []any {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return args
+}
+
+// uniqueIDs は重複を除いた ID 列を返す（出現順は維持する）。
+func uniqueIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // fetchUser は users テーブルから1件取得する
@@ -147,9 +186,6 @@ func (h *Handler) fetchPost(r *http.Request, postID, viewerID int64) (model.Post
 
 	return p, nil
 }
-
-// maxThreadDepth はスレッドを辿る深さの上限（循環や極端に深いスレッドの保険）。
-const maxThreadDepth = 50
 
 // countReplies は投稿にぶら下がる返信の数を返す。ネストした返信も含めた合計。
 func (h *Handler) countReplies(r *http.Request, postID int64, depth int) int {
