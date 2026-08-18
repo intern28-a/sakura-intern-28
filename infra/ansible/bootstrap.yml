@@ -122,7 +122,6 @@
         - { src: "{{ playbook_dir }}/group_vars/all.yml", dest: "group_vars/all.yml" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/001_init.sql", dest: "migrations/001_init.sql" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
-        - { src: "{{ playbook_dir }}/../../app/backend/migrations/003_convert_tables_to_utf8mb4.sql", dest: "migrations/003_convert_tables_to_utf8mb4.sql" }
         - { src: "{{ playbook_dir }}/scripts/run-migrations.sh", dest: "scripts/run-migrations.sh" }
 
     - name: Render private inventory for node-01
