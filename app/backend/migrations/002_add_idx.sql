@@ -6,10 +6,9 @@ CREATE INDEX POSTS_USER_ID_INDEX ON posts (user_id);
 -- 単体のインデックスは複合インデックスの左端一致で代用できるためつけない
 CREATE INDEX FOLLOWS_FOLLOWEE_FOLLOWER_ID_INDEX ON follows (followee_id, follower_id);
 
--- likes.user_id, likes.post_idが複合主キーなのでインデックスは貼らない
+-- likes.user_id, likes.post_id は (user_id, post_id) の複合主キーだが、post_id 単体検索があるためインデックスを貼る
+CREATE INDEX LIKES_POST_ID_USER_ID_INDEX ON likes (post_id, user_id);
 CREATE INDEX LIKES_CREATED_AT_INDEX ON likes (created_at);
-
--- likes.user_id, likes.post_idが複合主キーなのでインデックスは貼らない
 
 CREATE INDEX FOOTPRINTS_USER_ID_INDEX ON footprints (user_id);
 
