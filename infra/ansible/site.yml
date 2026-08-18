@@ -1,0 +1,63 @@
+---
+- name: Deploy application to app nodes
+  hosts: app
+  become: true
+  vars:
+    app_dir: /opt/sakuravel
+
+  tasks:
+    - name: Wait for cloud-init apt operations to finish
+      ansible.builtin.shell: |
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do
+          sleep 5
+        done
+      changed_when: false
+
+    - name: Install Docker when it is not already installed
+      ansible.builtin.shell: bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
+      args:
+        creates: /usr/bin/docker
+
+    - name: Verify Docker is available
+      ansible.builtin.command: docker --version
+      changed_when: false
+
+    - name: Verify Docker Compose V2 is available
+      ansible.builtin.command: docker compose version
+      changed_when: false
+
+    - name: Login to the private container registry
+      ansible.builtin.command:
+        cmd: docker login {{ registry_host }} --username {{ registry_username }} --password-stdin
+        stdin: "{{ registry_password }}"
+      when:
+        - registry_username is defined
+        - registry_password is defined
+      no_log: true
+
+    - name: Enable Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Render Compose file
+      ansible.builtin.template:
+        src: compose.yml.j2
+        dest: "{{ app_dir }}/compose.yml"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+
+    - name: Pull and start application
+      ansible.builtin.command:
+        cmd: docker compose -f compose.yml up -d --pull always
+        chdir: "{{ app_dir }}"

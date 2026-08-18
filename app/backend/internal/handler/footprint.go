@@ -44,14 +44,31 @@ func (h *Handler) GetFootprints(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var fp fpRow
 		var lastVisited any
-		rows.Scan(&fp.visitorID, &fp.visitCount, &lastVisited)
+		if err := rows.Scan(&fp.visitorID, &fp.visitCount, &lastVisited); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		rawFps = append(rawFps, fp)
+	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	visitorIDs := make([]int64, 0, len(rawFps))
+	for _, rf := range rawFps {
+		visitorIDs = append(visitorIDs, rf.visitorID)
+	}
+	visitors, err := h.fetchUsersByIDs(r, visitorIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
 	}
 
 	fps := make([]any, 0, len(rawFps))
 	for _, rf := range rawFps {
-		visitor, err := h.fetchUser(r, rf.visitorID)
-		if err != nil {
+		visitor, ok := visitors[rf.visitorID]
+		if !ok {
 			continue
 		}
 		fps = append(fps, map[string]any{

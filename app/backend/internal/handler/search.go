@@ -45,14 +45,25 @@ func (h *Handler) searchPosts(w http.ResponseWriter, r *http.Request, q string, 
 	postIDs := make([]int64, 0)
 	for rows.Next() {
 		var postID int64
-		rows.Scan(&postID)
+		if err := rows.Scan(&postID); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		postIDs = append(postIDs, postID)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
+	fetched, err := h.fetchPostsByIDs(r, postIDs, viewerID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	posts := make([]any, 0, len(postIDs))
 	for _, postID := range postIDs {
-		p, err := h.fetchPost(r, postID, viewerID)
-		if err == nil {
+		if p, ok := fetched[postID]; ok {
 			posts = append(posts, p)
 		}
 	}
@@ -87,14 +98,25 @@ func (h *Handler) searchUsers(w http.ResponseWriter, r *http.Request, q string, 
 	userIDs := make([]int64, 0)
 	for rows.Next() {
 		var uid int64
-		rows.Scan(&uid)
+		if err := rows.Scan(&uid); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		userIDs = append(userIDs, uid)
 	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 
+	fetched, err := h.fetchUsersByIDs(r, userIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	users := make([]any, 0, len(userIDs))
 	for _, uid := range userIDs {
-		u, err := h.fetchUser(r, uid)
-		if err == nil {
+		if u, ok := fetched[uid]; ok {
 			users = append(users, u)
 		}
 	}

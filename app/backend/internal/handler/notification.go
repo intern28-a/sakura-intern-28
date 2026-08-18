@@ -44,14 +44,54 @@ func (h *Handler) GetNotifications(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var n notifRow
 		var createdAt any
-		rows.Scan(&n.id, &n.ntype, &n.actorID, &n.postID, &n.isRead, &createdAt)
+		if err := rows.Scan(&n.id, &n.ntype, &n.actorID, &n.postID, &n.isRead, &createdAt); err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 		rawNotifs = append(rawNotifs, n)
+	}
+	if err := rows.Err(); err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	// アクターと、抜粋に使う投稿をそれぞれまとめて取得する。
+	// 従来は通知1件ごとにアクター5クエリ + 抜粋2クエリを発行していた。
+	actorIDs := make([]int64, 0, len(rawNotifs))
+	targetIDs := make([]int64, 0, len(rawNotifs))
+	for _, rn := range rawNotifs {
+		actorIDs = append(actorIDs, rn.actorID)
+		if rn.postID != nil {
+			targetIDs = append(targetIDs, *rn.postID)
+		}
+	}
+
+	actors, err := h.fetchUsersByIDs(r, actorIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	// 通知対象の投稿本文と、その親（返信通知向け）の本文を2クエリで解決する
+	excerpts, parents, err := h.postExcerpts(r, targetIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	parentIDs := make([]int64, 0, len(parents))
+	for _, pid := range parents {
+		parentIDs = append(parentIDs, pid)
+	}
+	parentExcerpts, _, err := h.postExcerpts(r, parentIDs)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
 	}
 
 	notifs := make([]any, 0, len(rawNotifs))
 	for _, rn := range rawNotifs {
-		actor, err := h.fetchUser(r, rn.actorID)
-		if err != nil {
+		actor, ok := actors[rn.actorID]
+		if !ok {
 			continue
 		}
 
@@ -59,20 +99,9 @@ func (h *Handler) GetNotifications(w http.ResponseWriter, r *http.Request) {
 		// 返信通知の post_id は返信そのものを指すので、返信先の抜粋も添える。
 		var excerpt, parentExcerpt *string
 		if rn.postID != nil {
-			var content *string
-			var parentID *int64
-			if err := h.DB.QueryRowContext(r.Context(),
-				`SELECT content, parent_post_id FROM posts WHERE id = ?`, *rn.postID,
-			).Scan(&content, &parentID); err == nil {
-				excerpt = excerptOf(content)
-				if parentID != nil {
-					var parentContent *string
-					if err := h.DB.QueryRowContext(r.Context(),
-						`SELECT content FROM posts WHERE id = ?`, *parentID,
-					).Scan(&parentContent); err == nil {
-						parentExcerpt = excerptOf(parentContent)
-					}
-				}
+			excerpt = excerpts[*rn.postID]
+			if parentID, ok := parents[*rn.postID]; ok {
+				parentExcerpt = parentExcerpts[parentID]
 			}
 		}
 
@@ -126,6 +155,39 @@ func (h *Handler) GetUnreadCount(w http.ResponseWriter, r *http.Request) {
 		myID,
 	).Scan(&count)
 	h.respondJSON(w, http.StatusOK, map[string]int{"unread_count": count})
+}
+
+// postExcerpts は複数投稿の本文の抜粋と、返信元の投稿IDを1クエリでまとめて返す。
+func (h *Handler) postExcerpts(r *http.Request, ids []int64) (map[int64]*string, map[int64]int64, error) {
+	ids = uniqueIDs(ids)
+	excerpts := make(map[int64]*string, len(ids))
+	parents := make(map[int64]int64, len(ids))
+	if len(ids) == 0 {
+		return excerpts, parents, nil
+	}
+
+	rows, err := h.DB.QueryContext(r.Context(), `
+		SELECT id, content, parent_post_id FROM posts
+		WHERE id IN (`+placeholders(len(ids))+`)
+	`, idArgs(ids)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int64
+		var content *string
+		var parentID *int64
+		if err := rows.Scan(&id, &content, &parentID); err != nil {
+			return nil, nil, err
+		}
+		excerpts[id] = excerptOf(content)
+		if parentID != nil {
+			parents[id] = *parentID
+		}
+	}
+	return excerpts, parents, rows.Err()
 }
 
 // excerptOf は通知一覧に載せる本文の抜粋を返す。

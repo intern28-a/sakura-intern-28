@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sakuravel/internal/model"
 	"sakuravel/internal/realtime"
 )
 
@@ -82,57 +83,88 @@ func (h *Handler) GetThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 祖先をたどる（古い順に並べ替えて返す）
-	ancestors := make([]any, 0)
-	parent := post.ParentPostID
-	for depth := 0; parent != nil && depth < maxThreadDepth; depth++ {
-		a, err := h.fetchPost(r, *parent, viewerID)
-		if err != nil {
-			break
+	// 祖先の ID を先に集めてから、本体をまとめて取得する
+	ancestorIDs := h.ancestorIDs(r, post.ParentPostID)
+	fetchedAncestors, err := h.fetchPostsByIDs(r, ancestorIDs, viewerID)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	// 祖先は古い順に並べ替えて返す
+	ancestors := make([]any, 0, len(ancestorIDs))
+	for i := len(ancestorIDs) - 1; i >= 0; i-- {
+		if a, ok := fetchedAncestors[ancestorIDs[i]]; ok {
+			ancestors = append(ancestors, a)
 		}
-		ancestors = append([]any{a}, ancestors...)
-		parent = a.ParentPostID
 	}
 
 	h.respondJSON(w, http.StatusOK, map[string]any{
 		"ancestors": ancestors,
 		"post":      post,
-		"replies":   h.fetchReplyTree(r, postID, viewerID, 0),
+		"replies":   h.fetchReplyTree(r, postID, viewerID),
 	})
 }
 
+// ancestorIDs は返信先をさかのぼった投稿ID列を近い順に返す。
+func (h *Handler) ancestorIDs(r *http.Request, parentID *int64) []int64 {
+	ids := make([]int64, 0)
+	current := parentID
+	for depth := 0; current != nil && depth < maxThreadDepth; depth++ {
+		ids = append(ids, *current)
+		var next *int64
+		if err := h.DB.QueryRowContext(r.Context(),
+			`SELECT parent_post_id FROM posts WHERE id = ?`, *current,
+		).Scan(&next); err != nil {
+			break
+		}
+		current = next
+	}
+	return ids
+}
+
 // fetchReplyTree は子返信をツリー状に取得する。
-func (h *Handler) fetchReplyTree(r *http.Request, postID, viewerID int64, depth int) []any {
-	nodes := make([]any, 0)
+// ツリーの構造を1階層につき1クエリで集めてから、投稿本体をまとめて取得する。
+// 従来はノード1つごとに構造クエリ + 投稿取得（11クエリ以上）を発行していた。
+func (h *Handler) fetchReplyTree(r *http.Request, postID, viewerID int64) []any {
+	children := make(map[int64][]int64)
+	all := make([]int64, 0)
+
+	level := []int64{postID}
+	for depth := 0; depth < maxThreadDepth && len(level) > 0; depth++ {
+		byParent, err := h.childIDsByParent(r, level)
+		if err != nil {
+			break
+		}
+		next := make([]int64, 0)
+		for parentID, ids := range byParent {
+			children[parentID] = ids
+			next = append(next, ids...)
+		}
+		all = append(all, next...)
+		level = next
+	}
+
+	posts, err := h.fetchPostsByIDs(r, all, viewerID)
+	if err != nil {
+		return make([]any, 0)
+	}
+	return buildReplyTree(postID, children, posts, 0)
+}
+
+// buildReplyTree は取得済みの投稿からツリーを組み立てる（DBアクセスなし）。
+func buildReplyTree(parentID int64, children map[int64][]int64, posts map[int64]model.Post, depth int) []any {
+	nodes := make([]any, 0, len(children[parentID]))
 	if depth >= maxThreadDepth {
 		return nodes
 	}
-
-	rows, err := h.DB.QueryContext(r.Context(), `
-		SELECT id FROM posts
-		WHERE parent_post_id = ?
-		ORDER BY created_at ASC, id ASC
-	`, postID)
-	if err != nil {
-		return nodes
-	}
-
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
-
-	for _, id := range ids {
-		p, err := h.fetchPost(r, id, viewerID)
-		if err != nil {
+	for _, id := range children[parentID] {
+		p, ok := posts[id]
+		if !ok {
 			continue
 		}
 		nodes = append(nodes, map[string]any{
 			"post":    p,
-			"replies": h.fetchReplyTree(r, id, viewerID, depth+1),
+			"replies": buildReplyTree(id, children, posts, depth+1),
 		})
 	}
 	return nodes

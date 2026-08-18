@@ -10,9 +10,6 @@ ssh_authorized_keys:
   - ${ssh_public_key}
 %{ endif ~}
 
-# node-01 の NAT が立ち上がるまで node-02〜05 は外部へ出られない。
-# cloud-init 標準の apt 実行はその前に走ってしまうので無効化し、
-# runcmd 内で疎通を確認してから apt / docker を実行する。
 package_update: false
 package_upgrade: false
 
@@ -59,20 +56,16 @@ write_files:
       netplan apply
 
 %{ if is_gateway ~}
+      # node-02〜05 はグローバルIPを持たないため、このノードが NAT ゲートウェイ
+      # として ${private_cidr} からの通信を共有セグメントへ出す。
   - path: /usr/local/bin/setup-nat.sh
     permissions: '0755'
     content: |
       #!/bin/sh
-      # node-02〜05 はグローバルIPを持たないため、このノードが NAT ゲートウェイ
-      # として ${private_cidr} からの通信を共有セグメントへ出す。
       set -eu
-
       public_if="$(ip route show default | awk '{print $5; exit}')"
-
       sysctl -w net.ipv4.ip_forward=1
       echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-nat.conf
-
-      # -C で存在を確認してから追加するので、再実行してもルールが重複しない
       iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
         || iptables -t nat -A POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE
 
@@ -92,7 +85,6 @@ write_files:
       DEBIAN_FRONTEND=noninteractive apt-get update
       DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
       netfilter-persistent save
-
 %{ endif ~}
 %{ if !is_gateway ~}
   # ------------------------------------------------------------------
@@ -187,9 +179,7 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/sh
-      # Terraform は5台を並列に作るため、node-01 の NAT より先に
-      # node-02〜05 が起動しうる。外部へ出られるようになるまでここで待つ。
-      # 10秒間隔で最大60回 = 10分。
+      set -eu
       i=0
       until curl -fsS -m 5 -o /dev/null https://get.docker.com; do
         i=$((i + 1))
@@ -215,7 +205,6 @@ runcmd:
   - /usr/local/bin/setup-nat.sh
 %{ endif ~}
   - /usr/local/bin/wait-for-internet.sh
-  # Docker Engine と Compose V2 のインストール
   - DEBIAN_FRONTEND=noninteractive apt-get update
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker

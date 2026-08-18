@@ -1,0 +1,21 @@
+services:
+  api:
+    image: {{ registry_host }}/intern2026-app-backend:latest
+    platform: linux/amd64
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: {{ (db_user ~ ':' ~ db_password ~ '@tcp(' ~ db_host ~ ':' ~ (db_port | string) ~ ')/' ~ db_name ~ '?parseTime=true&charset=utf8mb4') | to_json }}
+      PORT: '8080'
+    restart: on-failure
+
+  frontend:
+    image: {{ registry_host }}/intern2026-app-frontend:latest
+    platform: linux/amd64
+    ports:
+      - "3000:3000"
+    environment:
+      API_URL: {{ api_url | to_json }}
+    depends_on:
+      - api
+    restart: on-failure

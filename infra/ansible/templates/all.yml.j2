@@ -1,0 +1,12 @@
+---
+registry_host: {{ registry_host | default('intern22.sakuracr.jp') | to_json }}
+api_url: {{ api_url | default('http://192.168.1.12:8080') | to_json }}
+db_host: {{ db_host | default('192.168.1.30') | to_json }}
+db_port: {{ db_port | default(3306) }}
+db_name: {{ db_name | default('sakuravel_app') | to_json }}
+db_user: {{ db_user | default('sakuravel_app') | to_json }}
+
+node_private_ips:
+{% for node, ip in node_private_ips.items() %}
+  {{ node }}: {{ ip | to_json }}
+{% endfor %}

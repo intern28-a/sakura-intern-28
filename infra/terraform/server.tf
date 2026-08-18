@@ -62,6 +62,6 @@ resource "sakura_server" "node" {
 
 resource "sakura_ssh_key" "foobar" {
   name        = "localsshkey"
-  public_key  = file(pathexpand("~/.ssh/id_ed25519.pub"))
-  description = "node-01から02~05へのsshをするための公開鍵"
+  public_key  = file(pathexpand("~/.ssh/intern28.pub"))
+  description = "nodeへのsshをするための公開鍵"
 }
