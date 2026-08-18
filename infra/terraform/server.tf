@@ -15,7 +15,7 @@ data "sakura_zone" "current" {
 resource "sakura_disk" "node" {
   count = var.node_count
 
-  name              = format("%s-%02d-disk", var.node_name_prefix, count.index + 1)
+  name              = "${local.node_names[count.index]}-disk"
   plan              = var.disk_plan
   size              = var.disk_size
   source_archive_id = data.sakura_archive.ubuntu.id
@@ -25,14 +25,14 @@ resource "sakura_disk" "node" {
 resource "sakura_server" "node" {
   count = var.node_count
 
-  name   = format("%s-%02d", var.node_name_prefix, count.index + 1)
+  name   = local.node_names[count.index]
   disks  = [sakura_disk.node[count.index].id]
   core   = var.server_core
   memory = var.server_memory
   zone   = var.zone
 
-  # 共有セグメント (グローバルIP) を持つのは node-01 のみ。
-  # node-02〜05 は app スイッチ1本だけで、外部通信は node-01 の NAT を経由する。
+  # 共有セグメント (グローバルIP) を持つのは edge のみ。
+  # node-02〜05 は app スイッチ1本だけで、外部通信は edge の NAT を経由する。
   network_interface = concat(
     count.index == 0 ? [{ upstream = "shared" }] : [],
     [{ upstream = sakura_vswitch.app.id }],
@@ -40,14 +40,14 @@ resource "sakura_server" "node" {
 
   # cloud-init user-data
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    hostname       = format("%s-%02d", var.node_name_prefix, count.index + 1)
+    hostname       = local.node_names[count.index]
     password       = var.server_password
     ssh_public_key = var.server_ssh_public_key_path != "" ? file(pathexpand(var.server_ssh_public_key_path)) : ""
 
     private_ip    = local.node_private_ips[count.index]
     prefix_length = local.app_prefix_length
 
-    # node-01 だけが NAT ゲートウェイ兼、外部から VIP への入口として振る舞う
+    # edge だけが NAT ゲートウェイ兼、外部から VIP への入口として振る舞う
     is_gateway   = count.index == 0
     gateway_ip   = local.gateway_private_ip
     private_cidr = local.app_net_cidr

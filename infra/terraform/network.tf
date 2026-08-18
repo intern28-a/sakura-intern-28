@@ -16,12 +16,19 @@ locals {
   # app セグメントのプレフィックス長 (netplan の addresses に使う)
   app_prefix_length = split("/", local.app_net_cidr)[1]
 
-  # node-01 → 192.168.1.11, node-02 → 192.168.1.12, …
+  # edge → 192.168.1.11, node-02 → 192.168.1.12, …
   node_private_ips = [
     for i in range(var.node_count) : cidrhost(local.app_net_cidr, var.node_ip_offset + i)
   ]
 
-  # node-01 が NAT ゲートウェイを兼ねる。プライベート専用ノードと
+  # 先頭の1台だけは役割が違うので名前も分ける (踏み台 + NAT + DNAT 入口)。
+  # インデックスは他ノードと連続させたままにして、IP の対応関係を崩さない。
+  node_names = [
+    for i in range(var.node_count) :
+    i == 0 ? var.edge_node_name : format("%s-%02d", var.node_name_prefix, i + 1)
+  ]
+
+  # edge が NAT ゲートウェイを兼ねる。プライベート専用ノードと
   # データベースアプライアンスはこのアドレスをデフォルトゲートウェイにする。
   gateway_private_ip = local.node_private_ips[0]
 
@@ -32,7 +39,7 @@ locals {
 # DSR ロードバランサ
 ########################################
 # app スイッチ上に VIP を持つ L4 ロードバランサアプライアンス。
-# 実サーバは node-02〜05 で、node-01 は入口 + NAT ゲートウェイなので含めない。
+# 実サーバは node-02〜05 で、edge は入口 + NAT ゲートウェイなので含めない。
 #
 # DSR (Direct Server Return) 方式なので、
 #   - 転送時に書き換わるのは宛先 MAC だけで、宛先IP は VIP のまま実サーバに届く
@@ -51,7 +58,7 @@ locals {
   dsr_lb_private_ip = cidrhost(local.app_net_cidr, var.dsr_lb_ip_offset)
   dsr_lb_vip        = cidrhost(local.app_net_cidr, var.dsr_lb_vip_offset)
 
-  # node-02 以降を実サーバにする (node-01 は除外)
+  # node-02 以降を実サーバにする (edge は除外)
   dsr_lb_real_server_ips = slice(local.node_private_ips, 1, var.node_count)
 }
 
@@ -64,7 +71,7 @@ resource "sakura_dsr_lb" "app" {
   plan = var.dsr_lb_plan
 
   # app スイッチにはルータが無いため、データベースアプライアンスと同じく
-  # NAT ゲートウェイを兼ねる node-01 をデフォルトゲートウェイにする。
+  # NAT ゲートウェイを兼ねる edge をデフォルトゲートウェイにする。
   # ip_addresses は非冗長構成なので1つだけ (冗長化する場合は2つ指定する)。
   network_interface = {
     vswitch_id   = sakura_vswitch.app.id

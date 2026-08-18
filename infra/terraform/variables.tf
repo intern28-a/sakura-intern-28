@@ -35,7 +35,7 @@ variable "app_net_cidr" {
 }
 
 variable "node_ip_offset" {
-  description = "app セグメント内でノードに割り当てるホスト番号の開始値。node-01 が .11 になる。"
+  description = "app セグメント内でノードに割り当てるホスト番号の開始値。先頭ノード (edge) が .11 になる。"
   type        = number
   default     = 11
 }
@@ -50,8 +50,8 @@ variable "db_ip_offset" {
 # サーバー
 ########################################
 # 5台とも同一スペックの汎用ノード。役割 (LB / App / DB) は構築後に決める。
-# グローバルIP (共有セグメント) を持つのは node-01 のみで、
-# node-02〜05 は node-01 の NAT 経由で外部へ出る。
+# グローバルIP (共有セグメント) を持つのは先頭の edge のみで、
+# node-02〜05 は edge の NAT 経由で外部へ出る。
 
 variable "node_count" {
   description = "作成するサーバーの台数。"
@@ -60,9 +60,18 @@ variable "node_count" {
 }
 
 variable "node_name_prefix" {
-  description = "サーバー名の接頭辞。node-01 … node-05 のように連番が付く。"
+  description = "2台目以降のサーバー名の接頭辞。node-02 … node-05 のように連番が付く。"
   type        = string
   default     = "node"
+}
+
+variable "edge_node_name" {
+  description = <<-EOT
+    先頭ノードの名前。この1台だけがグローバルIPを持ち、踏み台・NAT ゲートウェイ・
+    外部から VIP への DNAT 入口を兼ねるため、他の汎用ノードとは別の名前を付ける。
+  EOT
+  type        = string
+  default     = "edge"
 }
 
 variable "server_core" {

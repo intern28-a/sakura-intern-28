@@ -1,5 +1,5 @@
 output "bastion_public_ip" {
-  description = "node-01 のグローバルIP。5台のうちここだけが共有セグメントに接続している。"
+  description = "edge のグローバルIP。5台のうちここだけが共有セグメントに接続している。"
   value       = sakura_server.node[0].ip_address
 }
 
@@ -16,7 +16,7 @@ output "db_host" {
 }
 
 output "ssh_commands" {
-  description = "各ノードへの SSH コマンド。node-02 以降は node-01 を踏み台にする。"
+  description = "各ノードへの SSH コマンド。node-02 以降は edge を踏み台にする。"
   value = {
     for i, s in sakura_server.node : s.name => (
       i == 0

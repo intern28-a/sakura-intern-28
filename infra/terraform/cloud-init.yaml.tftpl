@@ -63,7 +63,25 @@ write_files:
     content: |
       #!/bin/sh
       set -eu
-      public_if="$(ip route show default | awk '{print $5; exit}')"
+
+      # configure-nic.sh の netplan apply 直後はデフォルトルートが一時的に
+      # 消えるため、ここで待たないと $public_if が空になり
+      # "iptables: Empty interface is likely to be undesired" で失敗する。
+      # set -e と相まってスクリプトごと中断するので、確定するまで待つ。
+      i=0
+      while :; do
+        public_if="$(ip route show default | awk '{print $5; exit}')"
+        if [ -n "$public_if" ]; then
+          break
+        fi
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+          echo "default route not found after 60s" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+
       sysctl -w net.ipv4.ip_forward=1
       echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-nat.conf
       iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
@@ -89,8 +107,6 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/sh
-      # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
-      #
       # Docker は起動時に FORWARD の既定ポリシーを DROP にする。そのままだと
       #   - 外部 → このノードの DNAT → VIP  (共有セグメント → app セグメント)
       #   - node-02〜05 の NAT 経由の外部通信 (app セグメント → 共有セグメント)
@@ -101,7 +117,24 @@ write_files:
       # ここに許可を置けば docker の再起動でも消えない。
       set -eu
 
-      public_if="$(ip route show default | awk '{print $5; exit}')"
+      # configure-nic.sh の netplan apply 直後はデフォルトルートが一時的に
+      # 消えるため、ここで待たないと $public_if が空になり
+      # "iptables: Empty interface is likely to be undesired" で失敗する。
+      # set -e と相まってスクリプトごと中断するので、確定するまで待つ。
+      i=0
+      while :; do
+        public_if="$(ip route show default | awk '{print $5; exit}')"
+        if [ -n "$public_if" ]; then
+          break
+        fi
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+          echo "default route not found after 60s" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+
       private_if="$(ip -o route show ${private_cidr} | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
 
       if [ -z "$private_if" ]; then
@@ -182,7 +215,7 @@ write_files:
       # DB アプライアンスへのスキーマ投入が済んだら compose.reg.yml の api
       # コンテナに置き換え、dsr-echo.service は停止・無効化する。
       #
-      # ホスト名を返すので、node-01 から
+      # ホスト名を返すので、edge から
       #   for i in $(seq 20); do curl -s http://${dsr_lb_vip}:${dsr_lb_port}; echo; done
       # を回すと node-02〜05 にばらけているかがそのまま見える。
       #
