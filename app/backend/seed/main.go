@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	numUsers         = 9999
-	numPosts         = 100000
-	numFollows       = 500000
-	numLikes         = 10000000
-	numReposts       = 200000
-	numFootprints    = 200000
-	numNotifications = 200000
+	numUsers         = 1000
+	numPosts         = 10000
+	numFollows       = 50000
+	numLikes         = 100000
+	numReposts       = 20000
+	numFootprints    = 20000
+	numNotifications = 20000
 	// 1 回の INSERT で扱う行数は大きくするが、MySQL のプレースホルダー上限を超えないよう
 	// その都度 rowsPerInsert を計算して制限する。
 	batchSize = 50000
