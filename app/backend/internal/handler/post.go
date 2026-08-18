@@ -26,14 +26,21 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 			ORDER BY created_at DESC, id DESC
 			LIMIT ? OFFSET ?
 		`, perPage, offset)
+	// 直近24時間のいいね数を派生表で先に集約してから結合する。
+	// posts 側を GROUP BY すると TEXT 型の content が含まれ、
+	// ディスク上の一時表に落ちるため避けている。
 	case "recommended":
 		rows, err = h.DB.QueryContext(r.Context(), `
 			SELECT p.id
 			FROM posts p
-			LEFT JOIN likes l ON l.post_id = p.id AND l.created_at > NOW() - INTERVAL 24 HOUR
+			LEFT JOIN (
+				SELECT post_id, COUNT(*) AS c
+				FROM likes
+				WHERE created_at > NOW() - INTERVAL 24 HOUR
+				GROUP BY post_id
+			) l ON l.post_id = p.id
 			WHERE p.parent_post_id IS NULL
-			GROUP BY p.id, p.user_id, p.content, p.is_repost, p.original_post_id, p.created_at
-			ORDER BY COUNT(l.post_id) DESC, p.created_at DESC, p.id DESC
+			ORDER BY COALESCE(l.c, 0) DESC, p.created_at DESC, p.id DESC
 			LIMIT ? OFFSET ?
 		`, perPage, offset)
 	default: // "following"
