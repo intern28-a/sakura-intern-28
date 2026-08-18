@@ -8,12 +8,11 @@ func (h *Handler) GetTrending(w http.ResponseWriter, r *http.Request) {
 	myID, _ := h.currentUserID(r)
 
 	rows, err := h.DB.QueryContext(r.Context(), `
-		SELECT p.id, p.user_id, COUNT(l.post_id) AS recent_likes
-		FROM posts p
-		JOIN likes l ON l.post_id = p.id
-		WHERE l.created_at > NOW() - INTERVAL 1 HOUR
-		GROUP BY p.id, p.user_id
-		ORDER BY recent_likes DESC
+		SELECT l.post_id, COUNT(*) AS recent_likes
+		FROM likes l
+		WHERE l.created_at >= NOW() - INTERVAL 1 HOUR
+		GROUP BY l.post_id
+		ORDER BY recent_likes DESC, l.post_id DESC
 		LIMIT 20
 	`)
 	if err != nil {
@@ -24,13 +23,12 @@ func (h *Handler) GetTrending(w http.ResponseWriter, r *http.Request) {
 
 	type trendRow struct {
 		postID      int64
-		recentLikes int
+		recentLikes int64
 	}
 	var rawTrends []trendRow
 	for rows.Next() {
 		var t trendRow
-		var userID int64
-		if err := rows.Scan(&t.postID, &userID, &t.recentLikes); err != nil {
+		if err := rows.Scan(&t.postID, &t.recentLikes); err != nil {
 			h.respondError(w, http.StatusInternalServerError, "server error")
 			return
 		}
@@ -59,7 +57,7 @@ func (h *Handler) GetTrending(w http.ResponseWriter, r *http.Request) {
 		}
 		posts = append(posts, map[string]any{
 			"post":         p,
-			"recent_likes": rt.recentLikes,
+			"recent_likes": int(rt.recentLikes),
 		})
 	}
 
