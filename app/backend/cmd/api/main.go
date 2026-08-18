@@ -91,7 +91,26 @@ func routes(h *handler.Handler, auth *middleware.Auth) http.Handler {
 	// トレンド
 	mux.Handle("GET /trending", auth.Optional(http.HandlerFunc(h.GetTrending)))
 
+	// ヘルスチェック (DSR ロードバランサ用)
+	mux.HandleFunc("GET /healthz", healthz(h))
+
 	return mux
+}
+
+// healthz は DSR ロードバランサのヘルスチェック用エンドポイント。
+//
+// TODO: 中身が未実装のスタブ。現状はプロセスが生きていれば必ず 200 を返すため、
+// infra/terraform/network.tf の TCP チェックと判定能力が変わらない。
+// 少なくとも DB への疎通確認 (h.DB.PingContext) を入れて、DB に繋がらない
+// ノードが 503 を返して LB から自動的に外れるようにすること。
+// 実装したら network.tf の server ブロックを
+// protocol = "http" / path = "/healthz" / status = 200 に切り替える。
+func healthz(h *handler.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
