@@ -122,6 +122,50 @@ docker run --rm \
 - Tailwind CSS v4
 - TypeScript
 
+## HTTPS で公開する
+
+`backend/proxy/` に nginx（TLS 終端）の設定があります。フロントエンドとバックエンドを
+**同一オリジン**に載せる構成です。
+
+```
+https://<host>/           → frontend:3000
+https://<host>/backend/*  → api:8080   （nginx が /backend を除去して渡す）
+```
+
+別オリジンに分けないのは、この構成だと
+
+- CORS が不要になる（別オリジンだと GET を含む**全リクエストがプリフライト対象**になり往復が倍になります）
+- セッションCookieがサードパーティCookie扱いにならない（Safari 等でブロックされない）
+
+ためです。ブラウザの「1オリジン6接続」制限に SSE が引っかからないよう、**HTTP/2 を有効にしてあります**。
+
+### ローカルで HTTPS を確認する
+
+```bash
+cd backend
+./scripts/gen-dev-cert.sh                                     # 自己署名証明書を作る
+docker compose -f docker-compose.yml -f compose.https.yml up -d
+```
+
+`https://localhost/` にアクセスします（自己署名なのでブラウザの警告を承認してください）。
+素の `docker compose up -d` は今まで通り HTTP のままです。
+
+### 本番（グローバルIPを持つノード）
+
+ホスト名には `<グローバルIP>.sslip.io` を使います（DNS の設定は不要です）。
+
+1. `compose.reg.yml` の `frontend.API_URL` を `https://<グローバルIP>.sslip.io/backend` に書き換える
+2. 証明書を発行する（**まず `--staging` を付けて一度通してから**本番発行します）
+
+```bash
+./scripts/init-letsencrypt.sh -d <グローバルIP>.sslip.io -m you@example.com --staging
+./scripts/init-letsencrypt.sh -d <グローバルIP>.sslip.io -m you@example.com
+```
+
+3. `docker compose -f compose.reg.yml up -d`
+
+証明書の有効期限は90日です。更新には 80 番の開放が必要なので閉じないでください。
+
 ## コンテナレジストリ
 
 本番・配布用の Docker イメージは以下のコンテナレジストリを利用します。
@@ -144,8 +188,9 @@ docker run --rm \
 |---|---|---|
 | `DATABASE_URL` | MariaDB 接続文字列 | 空文字 |
 | `PORT` | API サーバーがリッスンするポート | `8080` |
-| `ALLOWED_ORIGIN` | CORS で許可するフロントエンドのオリジン | `http://localhost:3000` |
-| `COOKIE_SECURE` | `true` にするとセッションCookieに `Secure` + `SameSite=None` を付与する。フロントエンドとバックエンドが別オリジン（別サブドメイン等）で動く構成では必須 | `false` |
+| `ALLOWED_ORIGIN` | CORS で許可するフロントエンドのオリジン。**未設定なら CORS ヘッダを一切付けない**（リバースプロキシでフロントと同一オリジンに載せる構成用） | 空文字（CORS 無効） |
+| `COOKIE_SECURE` | `true` にするとセッションCookieに `Secure` を付与する。HTTPS 配信時は必須 | `false` |
+| `COOKIE_SAMESITE` | セッションCookieの `SameSite` 属性。`lax` / `none` / `strict`。`none` はフロントと API が別オリジンになる構成でのみ使う（`Secure` が前提） | `lax` |
 
 ※ PORTを変更する場合は下記の`API_URL`も変更する必要があります
 
@@ -156,7 +201,9 @@ docker run --rm \
 | `API_URL` | ブラウザから呼び出すバックエンド URL。`NEXT_PUBLIC_*` ではないため `next build` 時には埋め込まれず、コンテナ起動時の値がそのまま `/api/config` 経由でブラウザに渡される | `http://localhost:8080` |
 
 イメージは一度ビルドすれば環境ごとの再ビルドは不要です。デプロイ先ごとに `API_URL` の値だけ変えて起動してください。  
-フロントエンドとバックエンドが別オリジンになる構成（さくらのAppRun専有型など）では、バックエンド側の `ALLOWED_ORIGIN` と `COOKIE_SECURE=true` も併せて設定してください。
+`API_URL` にはパスを含められます（例: `https://example.com/backend`）。リバースプロキシでフロントと同一オリジンに載せる場合はこの形にします。
+
+フロントエンドとバックエンドを**別オリジン**に分ける構成（さくらのAppRun専有型など）では、バックエンド側に `ALLOWED_ORIGIN` と `COOKIE_SECURE=true` と `COOKIE_SAMESITE=none` を併せて設定してください。
 
 ## API エンドポイント
 

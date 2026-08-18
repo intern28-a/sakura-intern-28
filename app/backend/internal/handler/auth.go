@@ -19,16 +19,22 @@ func generateToken() (string, error) {
 }
 
 func (h *Handler) sessionCookie(value string, expiresAt time.Time) *http.Cookie {
+	sameSite := h.CookieSameSite
+	if sameSite == 0 {
+		sameSite = http.SameSiteLaxMode
+	}
 	c := &http.Cookie{
 		Name:     "session_id",
 		Value:    value,
 		Expires:  expiresAt,
 		HttpOnly: true,
 		Path:     "/",
+		Secure:   h.CookieSecure,
+		SameSite: sameSite,
 	}
-	if h.CookieSecure {
+	// SameSite=None は Secure が付いていないとブラウザに破棄される。
+	if sameSite == http.SameSiteNoneMode {
 		c.Secure = true
-		c.SameSite = http.SameSiteNoneMode
 	}
 	return c
 }

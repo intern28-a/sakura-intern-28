@@ -4,6 +4,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	appdb "sakuravel/internal/db"
 	"sakuravel/internal/handler"
@@ -16,10 +18,11 @@ func main() {
 	defer db.Close()
 
 	h := &handler.Handler{
-		DB:            db,
-		CookieSecure:  os.Getenv("COOKIE_SECURE") == "true",
-		Notifications: realtime.NewHub(),
-		Threads:       realtime.NewHub(),
+		DB:             db,
+		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
+		CookieSameSite: cookieSameSite(),
+		Notifications:  realtime.NewHub(),
+		Threads:        realtime.NewHub(),
 	}
 	auth := &middleware.Auth{DB: db}
 
@@ -32,12 +35,41 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	// SSE でレスポンスを流し続けるため WriteTimeout は設定しない。
+	// ヘッダ読み取りだけ打ち切って、リバースプロキシ手前での接続滞留を防ぐ。
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	log.Printf("starting server on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(srv.ListenAndServe())
+}
+
+// cookieSameSite は COOKIE_SAMESITE からセッションCookieの SameSite 属性を決める。
+// 同一オリジン構成では既定の Lax で足りる。None はフロントと別オリジンになる構成用。
+func cookieSameSite() http.SameSite {
+	switch strings.ToLower(os.Getenv("COOKIE_SAMESITE")) {
+	case "none":
+		return http.SameSiteNoneMode
+	case "strict":
+		return http.SameSiteStrictMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }
 
 func routes(h *handler.Handler, auth *middleware.Auth) http.Handler {
 	mux := http.NewServeMux()
+
+	// ヘルスチェック（リバースプロキシ／LB からの死活監視用）
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("ok"))
+	})
 
 	// 認証
 	mux.HandleFunc("POST /register", h.Register)
@@ -96,15 +128,20 @@ func routes(h *handler.Handler, auth *middleware.Auth) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
+	// リバースプロキシ配下でフロントと同一オリジンに載せる構成では CORS 自体が不要。
+	// ALLOWED_ORIGIN が未設定ならヘッダを付けず、プリフライトも発生させない。
 	if allowedOrigin == "" {
-		allowedOrigin = "http://localhost:3000"
+		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Add("Vary", "Origin")
 		if r.Method == http.MethodOptions {
+			// プリフライトの結果をキャッシュさせ、1リクエストごとの往復を減らす。
+			w.Header().Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

@@ -1,0 +1,35 @@
+# ローカルで本番と同じ HTTPS 構成（単一オリジン + HTTP/2）を再現するオーバーレイ。
+#
+#   ./scripts/gen-dev-cert.sh
+#   docker compose -f docker-compose.yml -f compose.https.yml up -d
+#   → https://localhost/   （自己署名なのでブラウザの警告を承認する）
+#
+# 素の `docker compose up -d` は今まで通り HTTP のまま。
+# scripts/bench.sh のベースライン（.bench/）は HTTP 側で取り続けること。
+
+services:
+  api:
+    environment:
+      # 単一オリジンなので CORS は不要。空にするとヘッダを付けなくなる。
+      - ALLOWED_ORIGIN=
+      - COOKIE_SECURE=true
+      - COOKIE_SAMESITE=lax
+
+  frontend:
+    environment:
+      # ブラウザは https://localhost/backend/... を叩き、nginx が /backend を除去して api へ渡す
+      - API_URL=https://localhost/backend
+
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./proxy/conf.d:/etc/nginx/conf.d:ro
+      - ./proxy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+      - frontend
+    restart: on-failure
