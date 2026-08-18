@@ -360,6 +360,35 @@ func (h *Handler) countRepliesByIDs(r *http.Request, ids []int64) (map[int64]int
 	return out, rows.Err()
 }
 
+// childIDsByParent は指定した複数の親IDについて、その直接の子を1クエリでまとめて引く。
+// 返信ツリーを1段ずつ幅優先で降りるために使う。
+func (h *Handler) childIDsByParent(r *http.Request, parentIDs []int64) (map[int64][]int64, error) {
+	parentIDs = uniqueIDs(parentIDs)
+	out := make(map[int64][]int64, len(parentIDs))
+	if len(parentIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := h.DB.QueryContext(r.Context(), `
+		SELECT id, parent_post_id FROM posts
+		WHERE parent_post_id IN (`+placeholders(len(parentIDs))+`)
+		ORDER BY created_at ASC, id ASC
+	`, idArgs(parentIDs)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, parentID int64
+		if err := rows.Scan(&id, &parentID); err != nil {
+			return nil, err
+		}
+		out[parentID] = append(out[parentID], id)
+	}
+	return out, rows.Err()
+}
+
 // threadRootID はスレッドの起点となる投稿IDを返す。
 func (h *Handler) threadRootID(r *http.Request, postID int64) int64 {
 	current := postID
