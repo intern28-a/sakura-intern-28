@@ -38,6 +38,20 @@ cp secret.auto.tfvars.example secret.auto.tfvars
 
 クレデンシャルなどは1Passwordに入ってます。
 
+## Ansible デプロイ
+
+手動で準備するシークレット、SSH鍵、Terraform実行、Ansibleデプロイの詳細は
+[`ansible/DEPLOYMENT.md`](ansible/DEPLOYMENT.md) を参照してください。
+
+VM 作成後、ローカルの `group_vars/all.yml` に DB・レジストリ認証情報を設定します。
+
+```bash
+cd ../ansible
+./deploy.sh
+```
+
+`deploy.sh` が Terraform の output から node-01 の公開 IP を取得し、SSH 秘密鍵・`all.yml` の確認、bootstrap、node-01 から node-02〜05 へのデプロイまでを自動実行します。node-01 上でのファイル編集や inventory の IP 編集は不要です。
+
 ```bash
 cd terraform
 terraform init

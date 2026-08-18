@@ -1,0 +1,127 @@
+---
+- name: Bootstrap Ansible controller on node-01
+  hosts: all
+  become: true
+  vars:
+    controller_dir: /opt/sakuravel-ansible
+    ssh_key_source: "{{ lookup('env', 'HOME') }}/.ssh/intern28"
+    ssh_key_destination: /home/ubuntu/.ssh/intern28
+    node_private_ips:
+      node-01: 192.168.1.11
+      node-02: 192.168.1.12
+      node-03: 192.168.1.13
+      node-04: 192.168.1.14
+      node-05: 192.168.1.15
+    registry_host: intern9.sakuracr.jp
+    api_url: http://192.168.1.12:8080
+    db_host: 192.168.1.30
+    db_port: 3306
+    db_name: sakuravel_app
+    db_user: sakuravel_app
+    app_private_ips:
+      - 192.168.1.12
+      - 192.168.1.13
+      - 192.168.1.14
+      - 192.168.1.15
+
+  tasks:
+    - name: Install Ansible controller packages
+      ansible.builtin.apt:
+        name:
+          - ansible-core
+          - git
+          - openssh-client
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure IPv4 forwarding is enabled
+      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
+      changed_when: false
+
+    - name: Check application NAT rule
+      ansible.builtin.command: iptables -t nat -C POSTROUTING -s 192.168.1.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
+      register: nat_rule
+      changed_when: false
+      failed_when: false
+
+    - name: Add application NAT rule
+      ansible.builtin.command: iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
+      when: nat_rule.rc != 0
+
+    - name: Create persistent firewall directory
+      ansible.builtin.file:
+        path: /etc/iptables
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: nat_rule.rc != 0
+
+    - name: Save firewall rules
+      ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+      when: nat_rule.rc != 0
+
+    - name: Create SSH directory for ubuntu
+      ansible.builtin.file:
+        path: /home/ubuntu/.ssh
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0700'
+
+    - name: Copy intern28 private key to node-01
+      ansible.builtin.copy:
+        src: "{{ ssh_key_source }}"
+        dest: "{{ ssh_key_destination }}"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+      no_log: true
+
+    - name: Scan application node SSH host keys
+      ansible.builtin.command: "ssh-keyscan -H {{ item }}"
+      loop: "{{ app_private_ips }}"
+      register: app_host_keys
+      changed_when: false
+
+    - name: Register application node SSH host keys
+      ansible.builtin.known_hosts:
+        name: "{{ item.item }}"
+        key: "{{ item.stdout }}"
+        path: /home/ubuntu/.ssh/known_hosts
+      loop: "{{ app_host_keys.results }}"
+
+    - name: Create controller directories
+      ansible.builtin.file:
+        path: "{{ controller_dir }}/{{ item }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+      loop:
+        - group_vars
+        - templates
+
+    - name: Copy controller files to node-01
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ controller_dir }}/{{ item.dest }}"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+      loop:
+        - { src: "{{ playbook_dir }}/ansible.cfg", dest: "ansible.cfg" }
+        - { src: "{{ playbook_dir }}/site.yml", dest: "site.yml" }
+        - { src: "{{ playbook_dir }}/templates/inventory.private.ini.j2", dest: "templates/inventory.private.ini.j2" }
+        - { src: "{{ playbook_dir }}/templates/compose.yml.j2", dest: "templates/compose.yml.j2" }
+        - { src: "{{ playbook_dir }}/templates/all.yml.j2", dest: "templates/all.yml.j2" }
+        - { src: "{{ playbook_dir }}/group_vars/all.yml", dest: "group_vars/all.yml" }
+
+    - name: Render private inventory for node-01
+      ansible.builtin.template:
+        src: inventory.private.ini.j2
+        dest: "{{ controller_dir }}/inventory.private.ini"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
