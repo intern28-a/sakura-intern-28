@@ -69,7 +69,6 @@ write_files:
       iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
         || iptables -t nat -A POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE
 
-      # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
       # VIP は app セグメント内のプライベートアドレスで、このスイッチにはルータが無い。
       # グローバルIPを持つのはこのノードだけなので、外部から来た :${dsr_lb_port} を
       # DSR ロードバランサの VIP へ転送する入口もここが兼ねる。
@@ -85,6 +84,59 @@ write_files:
       DEBIAN_FRONTEND=noninteractive apt-get update
       DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
       netfilter-persistent save
+
+  - path: /usr/local/bin/setup-forward.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
+      #
+      # Docker は起動時に FORWARD の既定ポリシーを DROP にする。そのままだと
+      #   - 外部 → このノードの DNAT → VIP  (共有セグメント → app セグメント)
+      #   - node-02〜05 の NAT 経由の外部通信 (app セグメント → 共有セグメント)
+      # の2つが落ちる。setup-nat.sh は Docker インストール前に走るので、
+      # そちらでは対処できない (DOCKER-USER チェーンがまだ存在しない)。
+      #
+      # DOCKER-USER は Docker が作るが中身は触らないチェーンなので、
+      # ここに許可を置けば docker の再起動でも消えない。
+      set -eu
+
+      public_if="$(ip route show default | awk '{print $5; exit}')"
+      private_if="$(ip -o route show ${private_cidr} | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+
+      if [ -z "$private_if" ]; then
+        echo "private interface not found" >&2
+        exit 1
+      fi
+
+      # Docker がまだチェーンを作っていない場合に備える
+      iptables -N DOCKER-USER 2>/dev/null || true
+      iptables -C FORWARD -j DOCKER-USER 2>/dev/null || iptables -I FORWARD -j DOCKER-USER
+
+      # -C で存在を確認してから追加するので、再実行してもルールが重複しない
+      iptables -C DOCKER-USER -i "$public_if" -o "$private_if" -j ACCEPT 2>/dev/null \
+        || iptables -I DOCKER-USER -i "$public_if" -o "$private_if" -j ACCEPT
+      iptables -C DOCKER-USER -i "$private_if" -o "$public_if" -j ACCEPT 2>/dev/null \
+        || iptables -I DOCKER-USER -i "$private_if" -o "$public_if" -j ACCEPT
+
+  - path: /etc/systemd/system/dsr-forward.service
+    content: |
+      [Unit]
+      # 毎回 Docker の後に流し直す。netfilter-persistent で保存すると
+      # Docker 自身のルールまで復元されて起動時に競合するため、
+      # 永続化ではなく boot ごとの再適用にしている。
+      Description=Allow forwarding between shared and app segments
+      After=docker.service
+      Wants=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/bin/setup-forward.sh
+
+      [Install]
+      WantedBy=multi-user.target
+
 %{ endif ~}
 %{ if !is_gateway ~}
   # ------------------------------------------------------------------
@@ -209,3 +261,8 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
   - usermod -aG docker ubuntu
+%{ if is_gateway ~}
+  # Docker が FORWARD を DROP にした後でないと DOCKER-USER チェーンが無い
+  - systemctl daemon-reload
+  - systemctl enable --now dsr-forward.service
+%{ endif ~}
