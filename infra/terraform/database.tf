@@ -24,6 +24,7 @@ resource "sakura_database" "db" {
     ip_address    = local.db_private_ip
     netmask       = tonumber(local.app_prefix_length)
     gateway       = local.gateway_private_ip
+    port          = 3306
     source_ranges = [local.app_net_cidr]
   }
 
