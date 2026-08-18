@@ -20,8 +20,8 @@ func New() *sql.DB {
 		log.Fatalf("db open: %v", err)
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(100)
+	db.SetMaxIdleConns(100)
 	db.SetConnMaxLifetime(0)
 
 	for i := 0; i < 10; i++ {
