@@ -47,11 +47,16 @@ resource "sakura_server" "node" {
     private_ip    = local.node_private_ips[count.index]
     prefix_length = local.app_prefix_length
 
-    # node-01 だけが NAT ゲートウェイとして振る舞う
+    # node-01 だけが NAT ゲートウェイ兼、外部から VIP への入口として振る舞う
     is_gateway   = count.index == 0
     gateway_ip   = local.gateway_private_ip
     private_cidr = local.app_net_cidr
     dns_servers  = data.sakura_zone.current.dns_servers
+
+    # DNAT の転送先。VIP は変数から算出しているので sakura_dsr_lb への
+    # 依存は生まれず、循環参照にはならない。
+    dsr_lb_vip  = local.dsr_lb_vip
+    dsr_lb_port = var.dsr_lb_port
   })
 }
 

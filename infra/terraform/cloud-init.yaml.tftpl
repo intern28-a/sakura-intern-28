@@ -76,12 +76,59 @@ write_files:
       iptables -t nat -C POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE 2>/dev/null \
         || iptables -t nat -A POSTROUTING -s ${private_cidr} -o "$public_if" -j MASQUERADE
 
+      # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
+      # VIP は app セグメント内のプライベートアドレスで、このスイッチにはルータが無い。
+      # グローバルIPを持つのはこのノードだけなので、外部から来た :${dsr_lb_port} を
+      # DSR ロードバランサの VIP へ転送する入口もここが兼ねる。
+      # 戻りは実サーバ → default gw (このノード) と返り、conntrack が DNAT を
+      # 逆変換するため SNAT は不要 (established は nat チェーンを通らないので
+      # 上の MASQUERADE も二重には効かない)。
+      iptables -t nat -C PREROUTING -i "$public_if" -p tcp --dport ${dsr_lb_port} -j DNAT --to-destination ${dsr_lb_vip}:${dsr_lb_port} 2>/dev/null \
+        || iptables -t nat -A PREROUTING -i "$public_if" -p tcp --dport ${dsr_lb_port} -j DNAT --to-destination ${dsr_lb_vip}:${dsr_lb_port}
+
       # 再起動後もルールを残す
       echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
       echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
       DEBIAN_FRONTEND=noninteractive apt-get update
       DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
       netfilter-persistent save
+
+%{ endif ~}
+%{ if !is_gateway ~}
+  # ------------------------------------------------------------------
+  # DSR ロードバランサの実サーバ設定 (node-02〜05)
+  # TODO: 本来は Ansible で管理する。いまは動作確認のため cloud-init に置く。
+  # ------------------------------------------------------------------
+  - path: /etc/sysctl.d/99-dsr.conf
+    content: |
+      # lo に付けた VIP でも、Linux は既定で ethernet 側から ARP 応答してしまう。
+      # 抑止しないと VIP の ARP に実サーバが答え、ロードバランサを素通りして
+      # 特定の1台に固定される (分散しているように見えて分散していない状態)。
+      # カーネルは max(all, インターフェース個別) を採用するので all だけで足りる。
+      net.ipv4.conf.all.arp_ignore = 1
+      net.ipv4.conf.all.arp_announce = 2
+
+  - path: /etc/systemd/system/dsr-vip.service
+    content: |
+      [Unit]
+      # DSR では宛先IPが VIP のまま届くため、VIP を自分のアドレスとして
+      # 持っていないとパケットを破棄してしまう。
+      # また Docker の PREROUTING は `-m addrtype --dst-type LOCAL -j DOCKER` で
+      # 条件付けされているので、VIP がローカル扱いにならないと公開ポートの
+      # DNAT も発火しない。
+      Description=Assign DSR loadbalancer VIP to loopback
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      # replace なので再実行しても重複しない
+      ExecStart=/usr/sbin/ip addr replace ${dsr_lb_vip}/32 dev lo
+      ExecStop=-/usr/sbin/ip addr del ${dsr_lb_vip}/32 dev lo
+
+      [Install]
+      WantedBy=multi-user.target
 
 %{ endif ~}
   - path: /usr/local/bin/wait-for-internet.sh
@@ -104,6 +151,13 @@ write_files:
 
 runcmd:
   - /usr/local/bin/configure-nic.sh
+%{ if !is_gateway ~}
+  # ARP 抑止を先に効かせてから VIP を付ける。逆順だと VIP を付けた瞬間から
+  # ARP 応答してしまう窓ができる。
+  - sysctl --system
+  - systemctl daemon-reload
+  - systemctl enable --now dsr-vip.service
+%{ endif ~}
 %{ if is_gateway ~}
   - /usr/local/bin/setup-nat.sh
 %{ endif ~}
