@@ -20,6 +20,7 @@ func New() *sql.DB {
 		log.Fatalf("db open: %v", err)
 	}
 
+	//TODO:コネクション最大数１
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
