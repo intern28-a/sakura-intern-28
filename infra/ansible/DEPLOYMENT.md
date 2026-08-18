@@ -83,7 +83,7 @@ chmod 600 group_vars/all.yml
 `group_vars/all.yml` に、1Passwordからレジストリ認証情報とManaged DB接続情報を記入します。
 
 ```yaml
-registry_host: intern9.sakuracr.jp
+registry_host: intern-fuga.sakuracr.jp
 registry_username: "..."
 registry_password: "..."
 

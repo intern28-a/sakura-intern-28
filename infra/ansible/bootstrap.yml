@@ -12,7 +12,7 @@
       node-03: 192.168.1.13
       node-04: 192.168.1.14
       node-05: 192.168.1.15
-    registry_host: intern9.sakuracr.jp
+    registry_host: intern-fuga.sakuracr.jp
     api_url: http://192.168.1.12:8080
     db_host: 192.168.1.30
     db_port: 3306
