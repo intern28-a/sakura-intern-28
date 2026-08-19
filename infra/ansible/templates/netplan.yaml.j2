@@ -1,0 +1,24 @@
+# site.yml が生成する。手で編集しない。
+#
+# NIC の並びはサーバへの接続順 (ifindex 順) で、
+#   [0] ルータ+スイッチ (グローバル、デフォルトルートあり)
+#   [1] app スイッチ (プライベート、デフォルトルート無し)
+# になる。グローバル側が先頭なのはさくらのクラウドの API 制約:
+#   "Only the first interface can be connected to router+switches or shared segments"DSR の戻りパケットは LB を通らず実サーバから直接クライアントへ返るため、
+# デフォルトルートはグローバル側を向いていなければならない。
+network:
+  version: 2
+  ethernets:
+    {{ public_if }}:
+      dhcp4: false
+      addresses:
+        - {{ node_public_ips[inventory_hostname] }}/{{ pub_network.netmask }}
+      routes:
+        - to: default
+          via: {{ pub_network.gateway }}
+      nameservers:
+        addresses: [{{ dns_servers | join(', ') }}]
+    {{ private_if }}:
+      dhcp4: false
+      addresses:
+        - {{ node_private_ips[inventory_hostname] }}/{{ app_net_cidr.split('/')[1] }}

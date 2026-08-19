@@ -31,11 +31,30 @@ resource "sakura_server" "node" {
   memory = var.server_memory
   zone   = var.zone
 
-  # 共有セグメント (グローバルIP) を持つのは edge のみ。
-  # node-02〜05 は app スイッチ1本だけで、外部通信は edge の NAT を経由する。
+  # グローバル側 (共有セグメント / ルータ+スイッチ) は【必ず NIC[0]】に置く。
+  # API 制約:
+  #   "Only the first interface can be connected to router+switches or shared segments"
+  # 2本目以降に置くと 400 bad_request で作成に失敗する。
+  #
+  # 結果、どのノードも並びは同じ形になる。これがそのまま OS 側の
+  # enumeration 順 (ifindex 順) になり、cloud-init が NIC を判別する根拠になる。
+  #   edge        : [0] 共有セグメント    [1] app スイッチ
+  #   node-02〜05 : [0] ルータ+スイッチ   [1] app スイッチ
   network_interface = concat(
-    count.index == 0 ? [{ upstream = "shared" }] : [],
-    [{ upstream = sakura_vswitch.app.id }],
+    count.index == 0 ? [{
+      upstream         = "shared"
+      packet_filter_id = null
+    }] : [],
+    contains(local.app_node_indexes, count.index) ? [{
+      upstream = sakura_internet.pub.vswitch_id
+      # グローバル側だけフィルタする。app スイッチ側は素通しなので、
+      # 踏み台経由の SSH は従来通り通る。
+      packet_filter_id = sakura_packet_filter.node[local.node_packet_filter_role[count.index]].id
+    }] : [],
+    [{
+      upstream         = sakura_vswitch.app.id
+      packet_filter_id = null
+    }],
   )
 
   # cloud-init user-data
@@ -44,19 +63,24 @@ resource "sakura_server" "node" {
     password       = var.server_password
     ssh_public_key = var.server_ssh_public_key_path != "" ? file(pathexpand(var.server_ssh_public_key_path)) : ""
 
-    private_ip    = local.node_private_ips[count.index]
-    prefix_length = local.app_prefix_length
+    # app スイッチ側。デフォルトルートは持たせない。
+    private_ip            = local.node_private_ips[count.index]
+    private_prefix_length = local.app_prefix_length
 
-    # edge だけが NAT ゲートウェイ兼、外部から VIP への入口として振る舞う
-    is_gateway   = count.index == 0
-    gateway_ip   = local.gateway_private_ip
-    private_cidr = local.app_net_cidr
-    dns_servers  = data.sakura_zone.current.dns_servers
+    # ルータ+スイッチ側。edge は載らないので null になる。
+    # さくらのルータ+スイッチは DHCP を提供しないため、静的に設定する。
+    has_public_nic       = contains(local.app_node_indexes, count.index)
+    public_ip            = local.node_public_ips[count.index]
+    public_prefix_length = sakura_internet.pub.netmask
+    public_gateway       = sakura_internet.pub.gateway
 
-    # DNAT の転送先。VIP は変数から算出しているので sakura_dsr_lb への
-    # 依存は生まれず、循環参照にはならない。
-    dsr_lb_vip  = local.dsr_lb_vip
-    dsr_lb_port = var.dsr_lb_port
+    dns_servers = data.sakura_zone.current.dns_servers
+
+    # DSR 実サーバ設定。lo に付ける VIP と待ち受けポートは役割で変わる。
+    # local 側で算出しているので sakura_dsr_lb への依存は生まれず、
+    # 循環参照にはならない。
+    dsr_vip  = local.node_dsr_vip[count.index]
+    dsr_port = local.node_service_port[count.index]
   })
 }
 

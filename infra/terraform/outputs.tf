@@ -1,22 +1,34 @@
+########################################
+# 接続情報
+########################################
+
+output "app_url" {
+  description = "ブラウザからアクセスする frontend の URL。LB-A の VIP。"
+  value       = "http://${local.lb_a_vip}:${var.frontend_port}"
+}
+
+output "api_url" {
+  description = <<-EOT
+    frontend の API_URL に渡す api の URL。LB-B の VIP。
+    ブラウザが直接叩くアドレスなので、プライベートIPは使えない
+    (app/backend/docs/design.md「ブラウザはバックエンドを直接呼び出す」)。
+  EOT
+  value       = "http://${local.lb_b_vip}:${var.dsr_lb_port}"
+}
+
 output "bastion_public_ip" {
-  description = "edge のグローバルIP。5台のうちここだけが共有セグメントに接続している。"
+  description = <<-EOT
+    edge のグローバルIP (共有セグメント)。
+    Ansible コントローラ兼踏み台。アプリのトラフィックは通らない。
+  EOT
   value       = sakura_server.node[0].ip_address
 }
 
-output "node_private_ips" {
-  description = "各ノードの app セグメント上のプライベートIP。"
-  value = {
-    for i, s in sakura_server.node : s.name => local.node_private_ips[i]
-  }
-}
-
-output "db_host" {
-  description = "データベースアプライアンスの接続先アドレス。"
-  value       = local.db_private_ip
-}
-
 output "ssh_commands" {
-  description = "各ノードへの SSH コマンド。node-02 以降は edge を踏み台にする。"
+  description = <<-EOT
+    各ノードへの SSH コマンド。node-02〜05 はグローバルIPを持つが、
+    パケットフィルタで 22 番を閉じてあるので edge を踏み台にする。
+  EOT
   value = {
     for i, s in sakura_server.node : s.name => (
       i == 0
@@ -26,25 +38,85 @@ output "ssh_commands" {
   }
 }
 
-output "switch_id" {
-  description = "全ノードが接続する app セグメントの vSwitch ID。"
+########################################
+# ネットワーク
+########################################
+
+output "node_private_ips" {
+  description = "各ノードの app セグメント上のプライベートIP。"
+  value = {
+    for i, s in sakura_server.node : s.name => local.node_private_ips[i]
+  }
+}
+
+output "node_public_ips" {
+  description = "ルータ+スイッチ に載るノード (node-02〜05) のグローバルIP。"
+  value = {
+    for i in local.app_node_indexes : local.node_names[i] => local.node_public_ips[i]
+  }
+}
+
+output "node_roles" {
+  description = <<-EOT
+    ルータ+スイッチ に載るノードの役割。frontend / api のいずれか。
+    Ansible のインベントリのグループ分けと compose の出し分けに使う。
+  EOT
+  value = {
+    for i in local.app_node_indexes :
+    local.node_names[i] => contains(local.frontend_node_indexes, i) ? "frontend" : "api"
+  }
+}
+
+output "dns_servers" {
+  description = "ゾーンの DNS サーバ。ノードの netplan に入れる。"
+  value       = data.sakura_zone.current.dns_servers
+}
+
+output "pub_network" {
+  description = "ルータ+スイッチ の払い出し内容。アドレス割り当ての確認用。"
+  value = {
+    network_address = sakura_internet.pub.network_address
+    netmask         = sakura_internet.pub.netmask
+    gateway         = sakura_internet.pub.gateway
+    ip_addresses    = sakura_internet.pub.ip_addresses
+  }
+}
+
+output "app_net_cidr" {
+  description = "app セグメントの CIDR。Ansible が netplan のプレフィックス長を取り出すのに使う。"
+  value       = local.app_net_cidr
+}
+
+output "app_switch_id" {
+  description = "全ノードとデータベースアプライアンスが接続する app セグメントの vSwitch ID。"
   value       = sakura_vswitch.app.id
 }
 
-output "dsr_lb_vip" {
-  description = <<-EOT
-    DSR ロードバランサの VIP。api (:8080) はこのアドレス経由で node-02〜05 へ振り分けられる。
-    app セグメント内のプライベートアドレスなので、外部からはそのまま到達できない。
-  EOT
-  value       = local.dsr_lb_vip
+output "db_host" {
+  description = "データベースアプライアンスの接続先アドレス。"
+  value       = local.db_private_ip
 }
 
-output "dsr_lb_private_ip" {
-  description = "DSR ロードバランサ本体の app セグメント上のアドレス。"
-  value       = local.dsr_lb_private_ip
+########################################
+# ロードバランサ
+########################################
+
+output "lb_frontend" {
+  description = "frontend 用ロードバランサ (LB-A) の構成。"
+  value = {
+    appliance_ip = local.lb_a_public_ip
+    vip          = local.lb_a_vip
+    port         = var.frontend_port
+    real_servers = [for i in local.frontend_node_indexes : local.node_public_ips[i]]
+  }
 }
 
-output "dsr_lb_real_server_ips" {
-  description = "DSR ロードバランサの振り分け先 (node-02〜05)。"
-  value       = local.dsr_lb_real_server_ips
+output "lb_api" {
+  description = "api 用ロードバランサ (LB-B) の構成。"
+  value = {
+    appliance_ip = local.lb_b_public_ip
+    vip          = local.lb_b_vip
+    port         = var.dsr_lb_port
+    real_servers = [for i in local.api_node_indexes : local.node_public_ips[i]]
+  }
 }
