@@ -1,6 +1,24 @@
+# bootstrap.yml が Terraform の出力 (node_roles / node_private_ips) から生成する。
+# 手で編集しても次回の deploy.sh で上書きされる。
+#
+# controller (edge) から見たアドレスなので、接続先は app セグメント側を使う。
+# node-02〜05 はグローバルIPも持つが、パケットフィルタで 22 番を閉じてある。
+
 [app]
-{% for node, ip in node_private_ips.items() if node != 'node-01' %}
-{{ node }} ansible_host={{ ip }}
+{% for node in node_roles %}
+{{ node }} ansible_host={{ node_private_ips[node] }}
+{% endfor %}
+
+# frontend コンテナを載せるノード
+[frontend]
+{% for node, role in node_roles.items() if role == 'frontend' %}
+{{ node }}
+{% endfor %}
+
+# api コンテナを載せるノード
+[api]
+{% for node, role in node_roles.items() if role == 'api' %}
+{{ node }}
 {% endfor %}
 
 [app:vars]

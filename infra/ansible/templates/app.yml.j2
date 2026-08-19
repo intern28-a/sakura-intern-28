@@ -1,0 +1,40 @@
+---
+# bootstrap.yml が Terraform の出力から生成する。手で編集しない。
+# 秘密情報は group_vars/all.yml 側に置くこと (このファイルは毎回上書きされる)。
+
+# アプリの入口。どちらもロードバランサの VIP を指す。
+#   app_url: ブラウザがアクセスする frontend
+#   api_url: frontend が /api/config で返し、ブラウザが直接叩く api
+app_url: {{ app_url | to_json }}
+api_url: {{ api_url | to_json }}
+
+app_net_cidr: {{ app_net_cidr | to_json }}
+
+# 待ち受けポート。DSR はポート変換をしないので VIP と実サーバで同じ値になる。
+frontend_port: {{ lb_frontend.port }}
+api_port: {{ lb_api.port }}
+
+node_private_ips:
+{% for node, ip in node_private_ips.items() %}
+  {{ node }}: {{ ip | to_json }}
+{% endfor %}
+
+node_public_ips:
+{% for node, ip in node_public_ips.items() %}
+  {{ node }}: {{ ip | to_json }}
+{% endfor %}
+
+node_roles:
+{% for node, role in node_roles.items() %}
+  {{ node }}: {{ role | to_json }}
+{% endfor %}
+
+# ルータ+スイッチ。DHCP が無いので netplan で静的に設定する。
+pub_network:
+  netmask: {{ pub_network.netmask }}
+  gateway: {{ pub_network.gateway | to_json }}
+
+dns_servers:
+{% for ip in dns_servers %}
+  - {{ ip | to_json }}
+{% endfor %}

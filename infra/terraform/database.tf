@@ -4,8 +4,9 @@
 # 冗長化・レプリケーションなし → replica_* は指定しない。
 # database_version は MariaDB = "10.11" (アプリの docker-compose と揃える)。
 #
-# NOTE: app セグメントにはルータが無いため、デフォルトゲートウェイには
-#       NAT ゲートウェイを兼ねる edge のプライベートIPを指定する。
+# NOTE: app セグメントにはルータが無い。DB は source_ranges でセグメント内に
+#       限定しており外部と通信しないため gateway は実質使われないが、
+#       network_interface の必須項目なので edge のプライベートIPを入れておく。
 
 resource "sakura_database" "db" {
   name = "db"

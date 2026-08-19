@@ -25,8 +25,10 @@ variable "zone" {
 ########################################
 # ネットワーク
 ########################################
-# ゾーン内のリソース数上限により vSwitch は1本のみ作成する。
-# 全ノードとデータベースアプライアンスがこの1本を共有する。
+# セグメントは2本。
+#   app スイッチ      : 全ノード + データベースアプライアンスのプライベート網
+#   ルータ+スイッチ   : グローバル網。LB アプライアンス2台と node-02〜05 が載る
+# ゾーン内のスイッチ上限は3本なので、この2本で収まる。
 
 variable "app_net_cidr" {
   description = "全ノードとデータベースアプライアンスが接続する app セグメントの CIDR。"
@@ -46,12 +48,33 @@ variable "db_ip_offset" {
   default     = 30
 }
 
+variable "pub_netmask" {
+  description = <<-EOT
+    ルータ+スイッチ に払い出すグローバルセグメントのプレフィックス長。26 / 27 / 28 のいずれか。
+    28 なら 16 アドレスのうち先頭がネットワーク・ルータ用に予約され、残りが払い出される。
+    LB本体×2 + VIP×2 + ノード×4 = 8 個使うので 28 で足りる。
+  EOT
+  type        = number
+  default     = 28
+
+  validation {
+    condition     = contains([26, 27, 28], var.pub_netmask)
+    error_message = "pub_netmask は 26 / 27 / 28 のいずれかを指定してください。"
+  }
+}
+
+variable "pub_band_width" {
+  description = "ルータ+スイッチ の帯域 (Mbps)。100 / 250 / 500 / 1000 などから選択。"
+  type        = number
+  default     = 100
+}
+
 ########################################
 # サーバー
 ########################################
-# 5台とも同一スペックの汎用ノード。役割 (LB / App / DB) は構築後に決める。
-# グローバルIP (共有セグメント) を持つのは先頭の edge のみで、
-# node-02〜05 は edge の NAT 経由で外部へ出る。
+# 5台とも同一スペックの汎用ノード。
+#   edge (先頭)   : 共有セグメント + app スイッチ。Ansible コントローラ兼踏み台
+#   node-02〜05   : app スイッチ + ルータ+スイッチ。自前のグローバルIPで外部へ出る
 
 variable "node_count" {
   description = "作成するサーバーの台数。"
@@ -159,11 +182,16 @@ variable "db_parameters" {
 }
 
 ########################################
-# DSR ロードバランサ
+# DSR ロードバランサ (2台)
 ########################################
+# ルータ+スイッチ 上に2台並べ、役割ごとに振り分けを分ける。
+#   LB-A: VIP-A:frontend_port → node-02 / node-03 (frontend)
+#   LB-B: VIP-B:dsr_lb_port   → node-04 / node-05 (api)
+# 本体アドレスと VIP はどちらも sakura_internet.pub の払い出しから取るため、
+# オフセット変数は持たない (network.tf の locals を参照)。
 
 variable "dsr_lb_plan" {
-  description = "DSR ロードバランサのプラン。standard / highspec のいずれか。"
+  description = "DSR ロードバランサのプラン。standard / highspec のいずれか。2台とも同じプランを使う。"
   type        = string
   default     = "standard"
 
@@ -173,32 +201,34 @@ variable "dsr_lb_plan" {
   }
 }
 
-variable "dsr_lb_ip_offset" {
-  description = "app セグメント内で DSR ロードバランサ本体に割り当てるホスト番号。"
-  type        = number
-  default     = 40
-}
-
-variable "dsr_lb_vip_offset" {
+variable "dsr_lb_a_vrid" {
   description = <<-EOT
-    app セグメント内で VIP に割り当てるホスト番号。
-    DSR 方式のため、実サーバ (node-02〜05) 側でもこのアドレスを
-    ループバックに割り当てる必要がある。
+    frontend 用ロードバランサ (LB-A) の VRID。
+    LB-B と同一セグメントに並ぶので、dsr_lb_b_vrid と重複させないこと。
   EOT
-  type        = number
-  default     = 50
-}
-
-variable "dsr_lb_vrid" {
-  description = "DSR ロードバランサの VRID。同一セグメント内で重複しない値にする。"
   type        = number
   default     = 1
 }
 
+variable "dsr_lb_b_vrid" {
+  description = "api 用ロードバランサ (LB-B) の VRID。dsr_lb_a_vrid と重複させないこと。"
+  type        = number
+  default     = 2
+}
+
+variable "frontend_port" {
+  description = <<-EOT
+    LB-A の VIP と frontend コンテナが待ち受けるポート番号。
+    DSR 方式ではポート変換が行われないため、VIP と実サーバで同じ値になる。
+  EOT
+  type        = number
+  default     = 3000
+}
+
 variable "dsr_lb_port" {
   description = <<-EOT
-    VIP で待ち受けるポート番号。DSR 方式ではポート変換が行われないため、
-    実サーバも同じポートで待ち受ける必要がある。api コンテナは 8080。
+    LB-B の VIP と api コンテナが待ち受けるポート番号。
+    DSR 方式ではポート変換が行われないため、VIP と実サーバで同じ値になる。
   EOT
   type        = number
   default     = 8080

@@ -5,6 +5,9 @@
   vars:
     app_dir: /opt/sakuravel
 
+    # このノードが lo に持つ VIP。役割で向き先のロードバランサが変わる。
+    node_vip: "{{ lb_frontend.vip if inventory_hostname in groups['frontend'] else lb_api.vip }}"
+
   tasks:
     - name: Wait for cloud-init apt operations to finish
       ansible.builtin.shell: |
@@ -20,6 +23,146 @@
         echo "timed out waiting for apt locks" >&2
         exit 1
       changed_when: false
+
+    # ------------------------------------------------------------------
+    # ネットワーク: ルータ+スイッチ側NICの設定と DSR 実サーバ設定
+    #
+    # cloud-init は初回起動時にしか走らないため、既存ノードへの反映はここで行う。
+    # NIC の並びはサーバへの接続順で [0] ルータ+スイッチ / [1] app スイッチ。
+    # グローバル側が先頭なのは API 制約 (2本目以降には接続できない)。
+    # ------------------------------------------------------------------
+    - name: Enumerate physical interfaces in ifindex order
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ip -o link show | awk -F': ' '{print $2}' | grep -Ev '^(lo|docker0|veth|br-)'
+        executable: /bin/bash
+      register: nic_list
+      changed_when: false
+
+    - name: Verify the router+switch NIC is attached
+      ansible.builtin.assert:
+        that: nic_list.stdout_lines | length >= 2
+        fail_msg: >-
+          {{ inventory_hostname }} has interfaces {{ nic_list.stdout_lines }};
+          expected two (app switch + router+switch). Run terraform apply first.
+
+    - name: Render netplan configuration
+      ansible.builtin.template:
+        src: netplan.yaml.j2
+        dest: /etc/netplan/60-nic.yaml
+        owner: root
+        group: root
+        mode: '0600'
+      vars:
+        # グローバル側 (ルータ+スイッチ) は API 制約で必ず NIC[0]。
+        public_if: "{{ nic_list.stdout_lines[0] }}"
+        private_if: "{{ nic_list.stdout_lines[1] }}"
+      register: netplan_conf
+
+    # cloud-init 時代のファイル。edge を指すデフォルトルートが入っているので消す。
+    - name: Remove the cloud-init era netplan file
+      ansible.builtin.file:
+        path: /etc/netplan/60-private-nic.yaml
+        state: absent
+      register: netplan_old
+
+    - name: Apply netplan
+      ansible.builtin.command: netplan apply
+      when: netplan_conf.changed or netplan_old.changed
+
+    - name: Configure ARP suppression for DSR
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-dsr.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # lo に付けた VIP でも、Linux は既定で ethernet 側から ARP 応答してしまう。
+          # 抑止しないと VIP の ARP に実サーバが答え、ロードバランサを素通りして
+          # 特定の1台に固定される。
+          net.ipv4.conf.all.arp_ignore = 1
+          net.ipv4.conf.all.arp_announce = 2
+      register: dsr_sysctl
+
+    - name: Reload sysctl
+      ansible.builtin.command: sysctl --system
+      when: dsr_sysctl.changed
+
+    - name: Point the DSR VIP unit at this node's VIP
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dsr-vip.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          # DSR では宛先IPが VIP のまま届くため、VIP を自分のアドレスとして
+          # 持っていないとパケットを破棄してしまう。
+          Description=Assign DSR loadbalancer VIP to loopback
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/sbin/ip addr replace {{ node_vip }}/32 dev lo
+          ExecStop=-/usr/sbin/ip addr del {{ node_vip }}/32 dev lo
+
+          [Install]
+          WantedBy=multi-user.target
+      register: dsr_vip_unit
+
+    - name: Enable and restart the DSR VIP unit
+      ansible.builtin.systemd:
+        name: dsr-vip.service
+        enabled: true
+        state: restarted
+        daemon_reload: true
+      when: dsr_vip_unit.changed
+
+    # 以前の構成で付けたプライベートVIP (192.168.1.50) が残ると、
+    # そのアドレス宛のパケットを黙って受けてしまうので落とす。
+    - name: Drop stale VIPs from loopback
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          removed=""
+          for addr in $(ip -4 -o addr show dev lo | awk '{print $4}'); do
+            case "$addr" in
+              127.*) continue ;;
+              {{ node_vip }}/32) continue ;;
+            esac
+            ip addr del "$addr" dev lo
+            removed="$removed $addr"
+          done
+          echo "removed:$removed"
+        executable: /bin/bash
+      register: stale_vips
+      changed_when: stale_vips.stdout != "removed:"
+
+    # :8080 を掴む動作確認用の仮リスナー。api コンテナとポートが衝突する。
+    - name: Check for the temporary DSR echo listener
+      ansible.builtin.stat:
+        path: /etc/systemd/system/dsr-echo.service
+      register: dsr_echo_unit
+
+    - name: Disable the temporary DSR echo listener
+      ansible.builtin.systemd:
+        name: dsr-echo.service
+        state: stopped
+        enabled: false
+      when: dsr_echo_unit.stat.exists
+
+    - name: Remove the temporary DSR echo listener
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/dsr-echo.service
+        - /usr/local/bin/dsr-echo-server.py
+      when: dsr_echo_unit.stat.exists
+      notify: Reload systemd
 
     - name: Apply database migrations from node-01
       ansible.builtin.command:
@@ -79,7 +222,14 @@
         group: ubuntu
         mode: '0600'
 
+    # --remove-orphans: compose.yml から消えたサービス (役割変更前の
+    # frontend / api) のコンテナを残さないため。
     - name: Pull and start application
       ansible.builtin.command:
-        cmd: docker compose -f compose.yml up -d --pull always
+        cmd: docker compose -f compose.yml up -d --pull always --remove-orphans
         chdir: "{{ app_dir }}"
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true

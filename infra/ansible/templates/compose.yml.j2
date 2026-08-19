@@ -1,21 +1,34 @@
+# site.yml がノードごとに生成する。役割によって載せるサービスが変わる。
+#   [frontend] グループ (node-02/03): frontend のみ
+#   [api]      グループ (node-04/05): api のみ
 services:
+{% if inventory_hostname in groups['api'] | default([]) %}
   api:
     image: {{ registry_host }}/intern2026-app-backend:latest
     platform: linux/amd64
     ports:
-      - "8080:8080"
+      - "{{ api_port }}:{{ api_port }}"
     environment:
       DATABASE_URL: {{ (db_user ~ ':' ~ db_password ~ '@tcp(' ~ db_host ~ ':' ~ (db_port | string) ~ ')/' ~ db_name ~ '?parseTime=true&charset=utf8mb4') | to_json }}
-      PORT: '8080'
+      PORT: {{ api_port | string | to_json }}
+      # ブラウザは frontend のオリジンから api を直接叩く
+      # (app/backend/docs/design.md「ブラウザはバックエンドを直接呼び出す」)。
+      # 未設定だと cmd/api/main.go のフォールバックで http://localhost:3000 のみ
+      # 許可になり、API 呼び出しが全部 CORS でブロックされる。
+      ALLOWED_ORIGIN: {{ app_url | to_json }}
+      # HTTP 運用なので false。HTTPS 化したら true にして
+      # セッションCookieに Secure + SameSite=None を付ける。
+      COOKIE_SECURE: "false"
     restart: on-failure
-
+{% endif %}
+{% if inventory_hostname in groups['frontend'] | default([]) %}
   frontend:
     image: {{ registry_host }}/intern2026-app-frontend:latest
     platform: linux/amd64
     ports:
-      - "3000:3000"
+      - "{{ frontend_port }}:{{ frontend_port }}"
     environment:
+      # ブラウザに渡されるURL。api は同居していないので LB-B の VIP を指す。
       API_URL: {{ api_url | to_json }}
-    depends_on:
-      - api
     restart: on-failure
+{% endif %}

@@ -6,23 +6,21 @@
     controller_dir: /opt/sakuravel-ansible
     ssh_key_source: "{{ lookup('env', 'HOME') }}/.ssh/intern28"
     ssh_key_destination: /home/ubuntu/.ssh/intern28
-    node_private_ips:
-      node-01: 192.168.1.11
-      node-02: 192.168.1.12
-      node-03: 192.168.1.13
-      node-04: 192.168.1.14
-      node-05: 192.168.1.15
     registry_host: intern-fuga.sakuracr.jp
-    api_url: http://192.168.1.12:8080
     db_host: 192.168.1.30
     db_port: 3306
     db_name: sakuravel_app
     db_user: sakuravel_app
-    app_private_ips:
-      - 192.168.1.12
-      - 192.168.1.13
-      - 192.168.1.14
-      - 192.168.1.15
+
+    # 以下は deploy.sh が Terraform の出力から -e で渡す。ここには書かない。
+    #   app_url / api_url        アプリの入口 (LB-A / LB-B の VIP)
+    #   node_private_ips         ノード名 → app セグメントのIP
+    #   node_public_ips          ノード名 → ルータ+スイッチ側のグローバルIP
+    #   node_roles               ノード名 → frontend / api
+    #   dns_servers / pub_network
+    #
+    # node_roles のキーがアプリを載せるノード (node-02〜05)。edge は含まれない。
+    app_private_ips: "{{ node_roles.keys() | map('extract', node_private_ips) | list }}"
 
   tasks:
     - name: Install Ansible controller packages
@@ -36,32 +34,28 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Ensure IPv4 forwarding is enabled
-      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
-      changed_when: false
-
-    - name: Check application NAT rule
-      ansible.builtin.command: iptables -t nat -C POSTROUTING -s 192.168.1.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
-      register: nat_rule
-      changed_when: false
+    # node-02〜05 はルータ+スイッチ側に自前のデフォルトルートを持つようになったため、
+    # edge の NAT は不要になった。以前設定した MASQUERADE が残っていると
+    # 経路が二重になって紛らわしいので明示的に落とす。
+    - name: Remove obsolete application NAT rule
+      ansible.builtin.command: iptables -t nat -D POSTROUTING -s 192.168.1.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
+      register: nat_rule_removed
+      changed_when: nat_rule_removed.rc == 0
       failed_when: false
 
-    - name: Add application NAT rule
-      ansible.builtin.command: iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o {{ ansible_default_ipv4.interface }} -j MASQUERADE
-      when: nat_rule.rc != 0
-
-    - name: Create persistent firewall directory
+    - name: Ensure persistent firewall directory exists
       ansible.builtin.file:
         path: /etc/iptables
         state: directory
         owner: root
         group: root
         mode: '0755'
-      when: nat_rule.rc != 0
+      when: nat_rule_removed.rc == 0
 
-    - name: Save firewall rules
+    - name: Persist firewall rules after NAT removal
       ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
-      when: nat_rule.rc != 0
+      when: nat_rule_removed.rc == 0
+      changed_when: true
 
     - name: Create SSH directory for ubuntu
       ansible.builtin.file:
@@ -118,7 +112,7 @@
         - { src: "{{ playbook_dir }}/site.yml", dest: "site.yml" }
         - { src: "{{ playbook_dir }}/templates/inventory.private.ini.j2", dest: "templates/inventory.private.ini.j2" }
         - { src: "{{ playbook_dir }}/templates/compose.yml.j2", dest: "templates/compose.yml.j2" }
-        - { src: "{{ playbook_dir }}/templates/all.yml.j2", dest: "templates/all.yml.j2" }
+        - { src: "{{ playbook_dir }}/templates/netplan.yaml.j2", dest: "templates/netplan.yaml.j2" }
         - { src: "{{ playbook_dir }}/group_vars/all.yml", dest: "group_vars/all.yml" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/001_init.sql", dest: "migrations/001_init.sql" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
@@ -128,6 +122,17 @@
       ansible.builtin.template:
         src: inventory.private.ini.j2
         dest: "{{ controller_dir }}/inventory.private.ini"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    # Terraform 由来の値を controller 側の group_vars に落とす。
+    # group_vars/all.yml (手で用意する秘密情報) とは別ファイルにして、
+    # 自動生成分が手書き分を潰さないようにする。
+    - name: Render Terraform-derived group vars for app nodes
+      ansible.builtin.template:
+        src: app.yml.j2
+        dest: "{{ controller_dir }}/group_vars/app.yml"
         owner: ubuntu
         group: ubuntu
         mode: '0644'
