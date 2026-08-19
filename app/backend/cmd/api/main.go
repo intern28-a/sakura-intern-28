@@ -4,11 +4,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	appdb "sakuravel/internal/db"
 	"sakuravel/internal/handler"
 	"sakuravel/internal/middleware"
 	"sakuravel/internal/realtime"
+
+	"github.com/patrickmn/go-cache"
 )
 
 func main() {
@@ -17,6 +20,7 @@ func main() {
 
 	h := &handler.Handler{
 		DB:            db,
+		TrendingCache: cache.New(30*time.Second, 1*time.Minute),
 		CookieSecure:  os.Getenv("COOKIE_SECURE") == "true",
 		Notifications: realtime.NewHub(),
 		Threads:       realtime.NewHub(),
