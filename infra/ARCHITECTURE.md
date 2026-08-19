@@ -1,8 +1,10 @@
 # インフラ構成
 
-さくらのクラウド `tk1a` ゾーン上に Terraform で構築している。このドキュメントは `infra/terraform` の実際の定義から起こしたもので、値はすべて変数のデフォルト値。
+さくらのクラウド `tk1a` ゾーン上に Terraform で構築している。このドキュメントは `infra/terraform` の実際の定義と、構築後の実機確認から起こしたもの。プライベートアドレスやポートは変数のデフォルト値。
 
-グローバルIPはさくら側から払い出されるため、実際の値は `terraform output` で確認する（`pub_network` / `node_public_ips` / `lb_frontend` / `lb_api`）。以下では `203.0.113.0/28` を例として使う。
+以下に書いてあるグローバルIPは **2026-08-19 時点で実際に払い出され、疎通確認まで済ませた値**。
+さくら側から払い出されるものなので、ルータ+スイッチやサーバを作り直すと変わる。
+最新の値は `terraform output` で確認する（`pub_network` / `node_public_ips` / `lb_frontend` / `lb_api` / `app_url` / `api_url`）。
 
 ## 全体図
 
@@ -11,16 +13,16 @@ graph TB
     client["インターネット<br/>クライアント (ブラウザ)"]
 
     subgraph shared["共有セグメント"]
-        edge_pub["edge<br/>グローバルIP"]
+        edge_pub["edge<br/>59.106.208.113"]
     end
 
-    subgraph pub["ルータ+スイッチ / 203.0.113.0/28"]
-        lba["<b>LB-A</b> .4<br/>VIP .5:3000"]
-        lbb["<b>LB-B</b> .6<br/>VIP .7:8080"]
-        n2p["node-02 .8"]
-        n3p["node-03 .9"]
-        n4p["node-04 .10"]
-        n5p["node-05 .11"]
+    subgraph pub["ルータ+スイッチ / 27.133.144.64/28 (GW .65)"]
+        lba["<b>LB-A</b> .68<br/>VIP .69:3000"]
+        lbb["<b>LB-B</b> .70<br/>VIP .71:8080"]
+        n2p["node-02 .72"]
+        n3p["node-03 .73"]
+        n4p["node-04 .74"]
+        n5p["node-05 .75"]
     end
 
     subgraph app["app スイッチ / 192.168.1.0/24 (ルータなし)"]
@@ -64,15 +66,15 @@ graph TB
                 │                            │
          ┌──────┴──────┐              ┌──────┴──────┐
          │    LB-A     │              │    LB-B     │
-         │  本体 .4    │              │  本体 .6    │
-         │  VIP  .5    │              │  VIP  .7    │
+         │  本体 .68   │              │  本体 .70   │
+         │  VIP  .69   │              │  VIP  .71   │
          └──────┬──────┘              └──────┬──────┘
                 │ 実サーバ                    │ 実サーバ
        ┌────────┴────────┐          ┌────────┴────────┐
        │                 │          │                 │
    ┌───┴────┐       ┌────┴───┐  ┌───┴────┐       ┌────┴───┐
    │node-02 │       │node-03 │  │node-04 │       │node-05 │
-   │ .8/.12 │       │ .9/.13 │  │.10/.14 │       │.11/.15 │
+   │.72/.12 │       │.73/.13 │  │.74/.14 │       │.75/.15 │
    │frontend│       │frontend│  │  api   │       │  api   │
    └───┬────┘       └────┬───┘  └───┬────┘       └────┬───┘
        └─────────────────┴─────┬────┴─────────────────┘
@@ -84,7 +86,7 @@ graph TB
               │ Ansible  │            │ MariaDB │
               │ + 踏み台 │            └─────────┘
               └──────────┘
-              共有セグメントにもう1本 NIC を持つ
+              共有セグメント側に 59.106.208.113
 ```
 
 各ノードは NIC を 2 本持つ（接続順 = OS の enumeration 順）。
@@ -126,19 +128,30 @@ API が `Only the first interface can be connected to router+switches or shared 
 
 ルータが無いセグメントで、DB への到達にのみ使う。デフォルトルートはここに置かない。
 
-### ルータ+スイッチ `203.0.113.0/28`（例）
+### ルータ+スイッチ `27.133.144.64/28`
 
-`sakura_internet.pub.ip_addresses`（払い出し可能アドレスの昇順リスト）の先頭から順に取る。
+ゲートウェイは `27.133.144.65`。`sakura_internet.pub.ip_addresses`（払い出し可能アドレスの昇順リスト）の先頭から順に取る。/28 で 11 個払い出され、うち 8 個を使用。
 
-| index | 用途 |
-|---|---|
-| 0 | LB-A 本体 |
-| 1 | **VIP-A**（frontend の受け口 :3000） |
-| 2 | LB-B 本体 |
-| 3 | **VIP-B**（api の受け口 :8080） |
-| 4 〜 7 | node-02 〜 node-05 |
+| index | アドレス | 用途 |
+|---|---|---|
+| 0 | 27.133.144.68 | LB-A 本体 |
+| 1 | **27.133.144.69** | **VIP-A**（frontend の受け口 :3000） |
+| 2 | 27.133.144.70 | LB-B 本体 |
+| 3 | **27.133.144.71** | **VIP-B**（api の受け口 :8080） |
+| 4 | 27.133.144.72 | node-02（frontend） |
+| 5 | 27.133.144.73 | node-03（frontend） |
+| 6 | 27.133.144.74 | node-04（api） |
+| 7 | 27.133.144.75 | node-05（api） |
+| 8 〜 10 | .76 〜 .78 | 未使用 |
 
-edge はここには載らず、従来通り共有セグメントのグローバルIPを持つ。
+アプリの入口はこの2つ。
+
+```
+frontend  http://27.133.144.69:3000     (terraform output app_url)
+api       http://27.133.144.71:8080     (terraform output api_url)
+```
+
+edge はここには載らず、共有セグメント側に `59.106.208.113` を持つ。
 
 ## ノードの役割
 
@@ -176,8 +189,8 @@ LB の実サーバには含まれない。
 ### ブラウザ → frontend
 
 ```
-クライアント     1.2.3.4:60000  → 203.0.113.5:3000   (VIP-A)
-LB-A             宛先MACのみ書換 → node-02:3000       (宛先IPは VIP のまま)
+クライアント     1.2.3.4:60000  → 27.133.144.69:3000  (VIP-A)
+LB-A             宛先MACのみ書換 → node-02:3000        (宛先IPは VIP のまま)
 実サーバ → クライアント（LB を経由せず直接返す = DSR）
 ```
 
@@ -186,7 +199,7 @@ LB-A             宛先MACのみ書換 → node-02:3000       (宛先IPは VIP �
 frontend は API を中継しない。`app/backend/docs/design.md` の通り、ブラウザが `/api/config` で受け取った `API_URL` を使ってバックエンドを直接呼び出す。そのため api 側の LB-B もグローバルに置いている。
 
 ```
-クライアント     1.2.3.4:60001  → 203.0.113.7:8080   (VIP-B)
+クライアント     1.2.3.4:60001  → 27.133.144.71:8080  (VIP-B)
 LB-B             宛先MACのみ書換 → node-04:8080
 実サーバ → クライアント（DSR）
 ```
@@ -207,8 +220,9 @@ node-02〜05 は自前のグローバルIPとデフォルトルートを持つ�
 |---|---|---|
 | Terraform | `sakura_dsr_lb.frontend` | `sakura_dsr_lb.api` |
 | 方式 | DSR (Direct Server Return) | 同左 |
-| VIP | `ip_addresses[1]`:3000 | `ip_addresses[3]`:8080 |
-| 実サーバ | node-02 / node-03 | node-04 / node-05 |
+| 本体 | 27.133.144.68 | 27.133.144.70 |
+| VIP | **27.133.144.69**:3000 | **27.133.144.71**:8080 |
+| 実サーバ | node-02 (.72) / node-03 (.73) | node-04 (.74) / node-05 (.75) |
 | ヘルスチェック | **TCP 接続確認のみ** | 同左 |
 | 監視間隔 | 10 秒（`delay_loop`） | 同左 |
 | タイムアウト / リトライ | 5 秒 / 3 回 | 同左 |
@@ -253,23 +267,64 @@ DSR では宛先が VIP のまま届き送信元はクライアントそのも�
 
 | コンテナ | ノード | ポート | 主な環境変数 |
 |---|---|---|---|
-| frontend | node-02 / 03 | 3000 | `API_URL` = `http://<VIP-B>:8080` |
-| api | node-04 / 05 | 8080 | `DATABASE_URL`, `ALLOWED_ORIGIN` = `http://<VIP-A>:3000`, `COOKIE_SECURE=false` |
+| frontend | node-02 / 03 | 3000 | `API_URL` = `http://27.133.144.71:8080`（VIP-B） |
+| api | node-04 / 05 | 8080 | `DATABASE_URL`, `ALLOWED_ORIGIN` = `http://27.133.144.69:3000`（VIP-A）, `COOKIE_SECURE=false` |
 
 アドレス・ポート・役割は Terraform の出力を単一の出典とし、`deploy.sh` → `bootstrap.yml` が controller 上に `group_vars/app.yml` を自動生成する。`group_vars/all.yml` には秘密情報だけを置く。
+
+> **2026-08-19 時点でアプリは未デプロイ。** インフラ作り直しに伴って edge も作られ直しており、
+> `/opt/sakuravel-ansible`・`ansible-core`・`~/.ssh/intern28` がいずれも無い状態。
+> `infra/ansible/deploy.sh` を流すと controller ごと再構築される。
 
 ## SSH
 
 node-02〜05 はグローバルIPを持つが、パケットフィルタで 22 番を閉じているため、SSH は edge を踏み台にする。
 
 ```bash
-ssh -i ~/.ssh/intern28 ubuntu@$(terraform output -raw bastion_public_ip)           # edge
-ssh -i ~/.ssh/intern28 -J ubuntu@<edge> ubuntu@192.168.1.12                        # node-02
+ssh -i ~/.ssh/intern28 ubuntu@59.106.208.113                                  # edge
+ssh -i ~/.ssh/intern28 -J ubuntu@59.106.208.113 ubuntu@192.168.1.12           # node-02
 ```
+
+サーバを作り直すと**ホスト鍵が変わる**。`Host key verification failed` が出たら
+`ssh-keygen -R <アドレス>` で古いエントリを消してから接続し直す。
 
 `-i` は ProxyJump 先の踏み台には引き継がれないため、`ssh-add ~/.ssh/intern28` するか `~/.ssh/config` に `IdentityFile` を書いておくとよい。書かないと踏み台のパスワードを聞かれる。
 
 `terraform output ssh_commands` で全ノード分のコマンドが出る。
+
+## 疎通確認
+
+2026-08-19 に以下を確認済み（アプリのデプロイ前、インフラ層のみ）。
+
+| 確認項目 | 結果 |
+|---|---|
+| ルータ+スイッチ | `27.133.144.64/28` 払い出し、GW `.65` に ping 到達 |
+| edge | `ens3` = 59.106.208.113 / `ens4` = 192.168.1.11。NAT (MASQUERADE) 撤去済み |
+| node-02〜05 | グローバル・プライベート両IP、デフォルトルートは `.65 via ens3`、cloud-init `done`、Docker 導入済み |
+| DSR VIP | node-02/03 の lo に `.69/32`、node-04/05 の lo に `.71/32` |
+| ARP 抑止 | 全ノード `arp_ignore=1` / `arp_announce=2` |
+| 外向き通信 | 各ノードから `get.docker.com` に 200、DNS 解決 OK |
+| DB | node-04 から `192.168.1.30:3306` 到達 |
+| 踏み台 | `ssh -J ubuntu@59.106.208.113 ubuntu@192.168.1.1X` で全ノードに到達 |
+
+### パケットフィルタの確認方法
+
+リスナーがまだ無い状態では、**`Connection refused` が返れば許可、タイムアウトなら遮断**と判別できる。
+
+```bash
+nc -vz 27.133.144.72 3000   # refused → 許可されている
+nc -vz 27.133.144.72 22     # timeout → 遮断されている
+```
+
+### DSR 経路の確認方法
+
+VIP に対して同じことをすると、**`Connection refused` が返ってくれば DSR の往復が成立している**。
+リスナーが無い実サーバが返した RST が、送信元を VIP のままクライアントまで戻ってきたことを意味するため。
+転送されていなければタイムアウトになる。
+
+```bash
+nc -vz 27.133.144.69 3000
+```
 
 ## 現状の制約・未対応
 
@@ -281,3 +336,4 @@ ssh -i ~/.ssh/intern28 -J ubuntu@<edge> ubuntu@192.168.1.12                     
 6. **cloud-init は初回起動時にしか走らない。** ネットワーク設定や DSR 周りを変更しても既存ノードには反映されないため、`infra/ansible/site.yml` 側にも同じ設定を持たせている。両方を更新すること
 7. **ディスクは 5 本が上限。** 作り直しを伴う変更は本数制限に当たりやすい。`-replace` を使う際は先に解放されるのを待つ必要がある
 8. **OS 内部のホスト名が Terraform 上の名前と一致しない場合がある。** cloud-init が hostname を適用するのは初回起動時のみのため、改名しても既存ノードには反映されない
+9. **ノードへの ping が返らない。** パケットフィルタに `allow icmp` を入れており API 側にも反映されている（`terraform state show 'sakura_packet_filter_rules.node["frontend"]'` で確認できる）が、実際には外部からの ICMP がノードに届かない。ルータ `.65` と両 VIP はパケットフィルタが無いため応答する。原因未特定。診断用のルールでサービスには影響しないが、**ノードの生死確認に ping は使えない**（上記「パケットフィルタの確認方法」の `nc` を使う）
