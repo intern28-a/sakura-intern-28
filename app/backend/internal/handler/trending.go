@@ -18,7 +18,9 @@ func (h *Handler) GetTrending(w http.ResponseWriter, r *http.Request) {
 	var rawTrends []trendRow
 	if h.TrendingCache != nil {
 		if cached, ok := h.TrendingCache.Get(trendingCacheKey); ok {
-			rawTrends, _ = cached.([]trendRow)
+			if v, ok := cached.([]trendRow); ok {
+				rawTrends = v
+			}
 		}
 	}
 
