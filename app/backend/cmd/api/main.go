@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"os"
@@ -10,7 +9,6 @@ import (
 	appdb "sakuravel/internal/db"
 	"sakuravel/internal/handler"
 	"sakuravel/internal/middleware"
-	"sakuravel/internal/ranking"
 	"sakuravel/internal/realtime"
 
 	"github.com/patrickmn/go-cache"
@@ -28,12 +26,6 @@ func main() {
 		Threads:       realtime.NewHub(),
 	}
 	auth := &middleware.Auth{DB: db}
-
-	// 人気投稿のランキングを定期的に集計する。
-	// 複数インスタンスで動かしてもロックを取れた1台だけが実行する。
-	ctx, stopRanking := context.WithCancel(context.Background())
-	defer stopRanking()
-	go ranking.New(db).Start(ctx)
 
 	mux := http.NewServeMux()
 
