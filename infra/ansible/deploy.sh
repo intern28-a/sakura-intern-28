@@ -29,6 +29,7 @@ PUB_NETWORK="$(terraform -chdir="${TERRAFORM_DIR}" output -json pub_network)"
 APP_NET_CIDR="$(terraform -chdir="${TERRAFORM_DIR}" output -raw app_net_cidr)"
 LB_FRONTEND="$(terraform -chdir="${TERRAFORM_DIR}" output -json lb_frontend)"
 LB_API="$(terraform -chdir="${TERRAFORM_DIR}" output -json lb_api)"
+DB_HOST="$(terraform -chdir="${TERRAFORM_DIR}" output -raw db_host)"
 
 # jq に依存しないよう、JSON をそのまま埋め込んで組み立てる
 TF_EXTRA_VARS="$(cat <<JSON
@@ -42,7 +43,8 @@ TF_EXTRA_VARS="$(cat <<JSON
   "pub_network": ${PUB_NETWORK},
   "app_net_cidr": "${APP_NET_CIDR}",
   "lb_frontend": ${LB_FRONTEND},
-  "lb_api": ${LB_API}
+  "lb_api": ${LB_API},
+  "db_host": "${DB_HOST}"
 }
 JSON
 )"

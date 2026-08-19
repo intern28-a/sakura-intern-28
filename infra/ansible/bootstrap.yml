@@ -1,5 +1,5 @@
 ---
-- name: Bootstrap Ansible controller on node-01
+- name: Bootstrap Ansible controller on edge
   hosts: all
   become: true
   vars:
@@ -7,7 +7,6 @@
     ssh_key_source: "{{ lookup('env', 'HOME') }}/.ssh/intern28"
     ssh_key_destination: /home/ubuntu/.ssh/intern28
     registry_host: intern-fuga.sakuracr.jp
-    db_host: 192.168.1.30
     db_port: 3306
     db_name: sakuravel_app
     db_user: sakuravel_app
@@ -17,7 +16,7 @@
     #   node_private_ips         ノード名 → app セグメントのIP
     #   node_public_ips          ノード名 → ルータ+スイッチ側のグローバルIP
     #   node_roles               ノード名 → frontend / api
-    #   dns_servers / pub_network
+    #   dns_servers / pub_network / db_host
     #
     # node_roles のキーがアプリを載せるノード (node-02〜05)。edge は含まれない。
     app_private_ips: "{{ node_roles.keys() | map('extract', node_private_ips) | list }}"
@@ -65,7 +64,7 @@
         group: ubuntu
         mode: '0700'
 
-    - name: Copy intern28 private key to node-01
+    - name: Copy intern28 private key to the edge controller
       ansible.builtin.copy:
         src: "{{ ssh_key_source }}"
         dest: "{{ ssh_key_destination }}"
@@ -100,7 +99,7 @@
         - scripts
         - templates
 
-    - name: Copy controller files to node-01
+    - name: Copy controller files to the edge controller
       ansible.builtin.copy:
         src: "{{ item.src }}"
         dest: "{{ controller_dir }}/{{ item.dest }}"
@@ -118,7 +117,7 @@
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
         - { src: "{{ playbook_dir }}/scripts/run-migrations.sh", dest: "scripts/run-migrations.sh" }
 
-    - name: Render private inventory for node-01
+    - name: Render private inventory for the application nodes
       ansible.builtin.template:
         src: inventory.private.ini.j2
         dest: "{{ controller_dir }}/inventory.private.ini"

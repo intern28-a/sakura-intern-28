@@ -121,7 +121,7 @@
         daemon_reload: true
       when: dsr_vip_unit.changed
 
-    # 以前の構成で付けたプライベートVIP (192.168.1.50) が残ると、
+    # 以前の構成で付けたプライベートVIPが残ると、
     # そのアドレス宛のパケットを黙って受けてしまうので落とす。
     - name: Drop stale VIPs from loopback
       ansible.builtin.shell:
@@ -164,7 +164,7 @@
       when: dsr_echo_unit.stat.exists
       notify: Reload systemd
 
-    - name: Apply database migrations from node-01
+    - name: Apply database migrations from the Ansible controller
       ansible.builtin.command:
         cmd: bash /opt/sakuravel-ansible/scripts/run-migrations.sh
       environment:

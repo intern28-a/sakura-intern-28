@@ -10,7 +10,18 @@ api_url: {{ api_url | to_json }}
 
 app_net_cidr: {{ app_net_cidr | to_json }}
 
-# 待ち受けポート。DSR はポート変換をしないので VIP と実サーバで同じ値になる。
+# Terraform が作成したマネージド DB の app セグメント側アドレス。
+db_host: {{ db_host | to_json }}
+
+# ロードバランサの VIP と待ち受けポート。DSR はポート変換をしないので
+# VIP と実サーバで同じポートになる。
+lb_frontend:
+  vip: {{ lb_frontend.vip | to_json }}
+  port: {{ lb_frontend.port }}
+lb_api:
+  vip: {{ lb_api.vip | to_json }}
+  port: {{ lb_api.port }}
+
 frontend_port: {{ lb_frontend.port }}
 api_port: {{ lb_api.port }}
 

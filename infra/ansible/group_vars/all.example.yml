@@ -4,7 +4,7 @@
 # アドレス・ポート・役割は Terraform の出力を単一の出典とし、
 # deploy.sh → bootstrap.yml が group_vars/app.yml を自動生成する。
 # そちらに含まれるもの (手で書かないこと):
-#   app_url / api_url / frontend_port / api_port
+#   app_url / api_url / lb_frontend / lb_api / frontend_port / api_port / db_host
 #   node_private_ips / node_public_ips / node_roles
 #   app_net_cidr / pub_network / dns_servers
 
@@ -12,8 +12,7 @@ registry_host: intern-fuga.sakuracr.jp
 registry_username: YOUR_REGISTRY_USERNAME
 registry_password: YOUR_REGISTRY_PASSWORD
 
-# Terraform で作成したマネージド DB
-db_host: 192.168.1.30
+# Terraform で作成したマネージド DB。db_host は deploy.sh が生成する。
 db_port: 3306
 db_name: sakuravel_app
 db_user: sakuravel_app
