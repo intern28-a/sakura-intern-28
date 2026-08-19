@@ -4,15 +4,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+
 	"sakuravel/internal/middleware"
 	"sakuravel/internal/model"
 	"sakuravel/internal/realtime"
 	"strconv"
 	"strings"
+
+	"github.com/patrickmn/go-cache"
 )
 
 type Handler struct {
-	DB *sql.DB
+	DB            *sql.DB
+	TrendingCache *cache.Cache
 	// CookieSecure が true の場合、セッションCookieに Secure + SameSite=None を付与する。
 	// フロントエンドとバックエンドが別オリジン（別サブドメイン等）で動く構成向け。
 	CookieSecure bool
