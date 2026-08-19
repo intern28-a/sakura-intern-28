@@ -111,12 +111,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.QueryRowContext(r.Context(),
 		`SELECT id, password_hash FROM users WHERE email = ?`, req.Email,
 	).Scan(&userID, &passwordHash)
-	if err != nil {
-		h.respondError(w, http.StatusUnauthorized, "invalid email or password")
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
 		h.respondError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
