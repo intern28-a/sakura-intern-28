@@ -125,6 +125,9 @@
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/001_init.sql", dest: "migrations/001_init.sql" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/003_add_fk.sql", dest: "migrations/003_add_fk.sql" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/004_perf_idx.sql", dest: "migrations/004_perf_idx.sql" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/005_post_ranking.sql", dest: "migrations/005_post_ranking.sql" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/006_post_ranking_event.sql", dest: "migrations/006_post_ranking_event.sql" }
         - { src: "{{ playbook_dir }}/scripts/run-migrations.sh", dest: "scripts/run-migrations.sh" }
 
     - name: Render private inventory for the application nodes
