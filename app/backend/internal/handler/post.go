@@ -46,6 +46,9 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	var rows *sql.Rows
 	var totalRow *sql.Row
 	var err error
+	// recommended で post_ranking から引いたかどうか。
+	// 引いた結果が1ページに満たなければ、その場集約に切り替える。
+	var usedRanking bool
 
 	// 返信（parent_post_id あり）はスレッド画面でのみ表示するためタイムラインから除く
 	switch feed {
@@ -62,8 +65,10 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		)
 	case "recommended":
 		// いいねの集約は EVENT が定期的に post_ranking へ書き出している。
-		// 上位 TopN 件はそこを順位で引くだけで済む。
-		if offset+perPage <= ranking.TopN {
+		// ランキングは上位 TopN 件しか持たず、いいねが1件も無い投稿も含まれない。
+		// 足りない場合は後段でその場集約に切り替える。
+		usedRanking = offset+perPage <= ranking.TopN
+		if usedRanking {
 			rows, err = h.DB.QueryContext(r.Context(), `
 				SELECT post_id FROM post_ranking
 				WHERE window_key = ?
@@ -107,9 +112,13 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// EVENT がまだ一度も走っていないと post_ranking は空になる。
-	// その場合はその場で集約して返す（DB 作成直後や EVENT 停止時の保険）。
-	if feed == "recommended" && len(ids) == 0 && offset == 0 {
+	// ランキングだけでは1ページ分に満たないことがある。
+	//   - EVENT がまだ走っていない（DB 作成直後や EVENT 停止時）
+	//   - 集計窓にいいねが少なく、ランキングの件数自体が少ない
+	//   - いいねが1件も無い投稿はランキングに載らない（元の実装では末尾に並んでいた）
+	// この場合はその場集約に切り替える。ランキングの並び順は
+	// その場集約の先頭部分と一致するので、結果は変わらない。
+	if usedRanking && len(ids) < perPage {
 		liveRows, liveErr := h.recommendedLive(r, perPage, offset)
 		if liveErr != nil {
 			h.respondError(w, http.StatusInternalServerError, "server error")
