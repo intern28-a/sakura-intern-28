@@ -10,11 +10,13 @@ git clone https://github.com/intern28-a/sakura-intern-28
 作業端末に以下を用意します。
 
 - Terraform
-- Ansible（`ansible-playbook`）
-- OpenSSH（`ssh`、`ssh-keygen`）
+- Ansible
+  - [インストール方法](https://docs.ansible.com/projects/ansible/latest/installation_guide/intro_installation.html#pip-install）
+  - macを使用している方は'brew install ansible'でも可
+- OpenSSH
 - Docker
 - さくらのクラウドのAPIトークンとシークレット
-- 1Passwordに登録されたVM初期パスワード、Managed DBパスワード、コンテナレジストリ認証情報
+- 1Passwordに登録されたシークレット情報
 
 ## 2. コンテナレジストリへのイメージ登録
 レジストリへのログイン
