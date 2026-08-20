@@ -113,46 +113,8 @@ IPアドレス用証明書だけが発行され、DNS設定は必要ありませ
 
 ## 5. アプリケーションをデプロイする（自動実行）
 
-VM作成後、次の1コマンドだけを実行します。
+VM作成後、次のコマンドを実行します。
 
 ```bash
-./deploy.sh
-```
-
-`deploy.sh` が以下を自動実行します。
-
-1. Terraform stateからnode-01の公開IPを取得
-2. SSH鍵と `group_vars/all.yml` の存在を確認
-3. node-01へAnsible、設定ファイル、SSH秘密鍵を配置
-4. node-01のIP forwardingとNATを設定
-5. node-01からnode-02〜05へのSSH接続を準備
-6. Managed DBへ未適用のデータベースマイグレーションをnode-02で一度だけ適用
-7. node-02〜05へDocker、レジストリログイン、アプリケーションを設定
-8. Managed DBを使用するComposeを起動
-
-node-01へログインしてファイルを手作業で編集したり、inventoryのIPを書き換えたりする必要はありません。
-
-初回接続時のSSHホストキーは`StrictHostKeyChecking=accept-new`で自動登録されます。登録済みホストのホストキーが変更された場合は、SSH接続を停止してエラーにします。
-
-## 6. デプロイ結果を確認する
-
-`deploy.sh` の最後に、node-02〜05のAnsible recapで `failed=0` と `unreachable=0` を確認します。
-
-必要に応じて、Terraformの出力からnode-01へ接続します。
-
-```bash
-cd ../terraform
-ssh -i ~/.ssh/intern28 ubuntu@"$(terraform output -raw bastion_public_ip)"
-```
-
-node-01からアプリケーションの状態を確認する場合は、Ansible実行後に次を実行します。
-
-```bash
-cd /opt/sakuravel-ansible
-ansible-playbook site.yml
-```
-
-```bash
-cd infra/ansible
 ./deploy.sh
 ```
