@@ -92,7 +92,18 @@ db_port: 3306
 db_name: sakuravel_app
 db_user: sakuravel_app
 db_password: "..."
+
+# 任意。DNSを使わずIPアドレスでアクセスする場合は空配列にする。
+tls_domains: []
+
+# DNSを設定してドメインでもアクセスする場合の例
+# tls_domains:
+#   - teama.intern28.sakuraha.jp
 ```
+
+`tls_domains` はドメイン名用証明書を発行するための設定です。空配列の場合は
+IPアドレス用証明書だけが発行され、DNS設定は必要ありません。ドメイン名を指定した
+場合は、IPアドレス用証明書に加えてドメイン名用証明書も発行されます。
 
 `db_port` は、Terraformで作成するMariaDBの接続ポート `3306` を指定します。DBの接続情報を変更した場合は、実際の値に合わせてください。
 

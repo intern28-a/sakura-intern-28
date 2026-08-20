@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+token="${CERTBOT_TOKEN:?CERTBOT_TOKEN is required}"
+validation="${CERTBOT_VALIDATION:?CERTBOT_VALIDATION is required}"
+local_dir=/var/www/certbot/.well-known/acme-challenge
+local_file="${local_dir}/${token}"
+remote_file="/var/www/certbot/.well-known/acme-challenge/${token}"
+mkdir -p "${local_dir}"
+printf '%s' "${validation}" > "${local_file}"
+scp -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new \
+  "${local_file}" "ubuntu@{{ tls_peer_ip }}:/tmp/certbot-${token}"
+ssh -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new "ubuntu@{{ tls_peer_ip }}" \
+  "sudo install -D -m 0644 /tmp/certbot-${token} '${remote_file}' && sudo rm -f /tmp/certbot-${token}"

@@ -93,9 +93,31 @@ locals {
   # 各ノードが待ち受けるサービスポート。パケットフィルタと DSR VIP の両方で使う。
   node_service_port = [
     for i in range(var.node_count) :
-    contains(local.frontend_node_indexes, i) ? var.frontend_port : (
-      contains(local.api_node_indexes, i) ? var.dsr_lb_port : null
+    contains(local.frontend_node_indexes, i) ? 443 : (
+      contains(local.api_node_indexes, i) ? 443 : null
     )
+  ]
+
+  # HTTPS は各実サーバの nginx で TLS 終端する。HTTP 80 は ACME
+  # HTTP-01 チャレンジと HTTPS リダイレクトのために残す。
+  frontend_lb_servers = [
+    for i in local.frontend_node_indexes : {
+      ip_address      = local.node_public_ips[i]
+      protocol        = "tcp"
+      connect_timeout = 5
+      retry           = 3
+      enabled         = true
+    }
+  ]
+
+  api_lb_servers = [
+    for i in local.api_node_indexes : {
+      ip_address      = local.node_public_ips[i]
+      protocol        = "tcp"
+      connect_timeout = 5
+      retry           = 3
+      enabled         = true
+    }
   ]
 }
 
@@ -152,15 +174,19 @@ resource "sakura_dsr_lb" "frontend" {
 
     # TODO: ヘルスチェックを HTTP に切り替える。
     #   現状は TCP 接続確認のみで、docker が待ち受けてさえいれば健全と見なされる。
-    server = [
-      for i in local.frontend_node_indexes : {
-        ip_address      = local.node_public_ips[i]
-        protocol        = "tcp"
-        connect_timeout = 5
-        retry           = 3
-        enabled         = true
-      }
-    ]
+    server = local.frontend_lb_servers
+    }, {
+    vip         = local.lb_a_vip
+    port        = 80
+    delay_loop  = 10
+    description = "frontend http / ACME"
+    server      = local.frontend_lb_servers
+    }, {
+    vip         = local.lb_a_vip
+    port        = 443
+    delay_loop  = 10
+    description = "frontend https"
+    server      = local.frontend_lb_servers
   }]
 }
 
@@ -192,14 +218,18 @@ resource "sakura_dsr_lb" "api" {
     #   ノードにも振り続けてしまう。
     #   cmd/api/main.go の GET /healthz スタブに DB 疎通確認を実装したうえで、
     #   下記を protocol = "http" / path = "/healthz" / status = 200 に変更する。
-    server = [
-      for i in local.api_node_indexes : {
-        ip_address      = local.node_public_ips[i]
-        protocol        = "tcp"
-        connect_timeout = 5
-        retry           = 3
-        enabled         = true
-      }
-    ]
+    server = local.api_lb_servers
+    }, {
+    vip         = local.lb_b_vip
+    port        = 80
+    delay_loop  = 10
+    description = "api http / ACME"
+    server      = local.api_lb_servers
+    }, {
+    vip         = local.lb_b_vip
+    port        = 443
+    delay_loop  = 10
+    description = "api https"
+    server      = local.api_lb_servers
   }]
 }

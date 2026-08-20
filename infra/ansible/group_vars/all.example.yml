@@ -1,5 +1,5 @@
 ---
-# group_vars/all.yml として配置する。ここには秘密情報だけを置く。
+# group_vars/all.yml として配置する。秘密情報と環境固有の任意設定を置く。
 #
 # アドレス・ポート・役割は Terraform の出力を単一の出典とし、
 # deploy.sh → bootstrap.yml が group_vars/app.yml を自動生成する。
@@ -11,6 +11,9 @@
 registry_host: intern-fuga.sakuracr.jp
 registry_username: YOUR_REGISTRY_USERNAME
 registry_password: YOUR_REGISTRY_PASSWORD
+
+# 任意。DNSを使わない場合は [] のままにする。
+tls_domains: []
 
 # Terraform で作成したマネージド DB。db_host は deploy.sh が生成する。
 db_port: 3306

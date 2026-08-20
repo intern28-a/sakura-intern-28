@@ -4,16 +4,25 @@
 
 output "app_url" {
   description = "ブラウザからアクセスする frontend の URL。LB-A の VIP。"
-  value       = "http://${local.lb_a_vip}:${var.frontend_port}"
+  value       = "https://${local.lb_a_vip}"
 }
 
 output "api_url" {
   description = <<-EOT
-    frontend の API_URL に渡す api の URL。LB-B の VIP。
-    ブラウザが直接叩くアドレスなので、プライベートIPは使えない
-    (app/backend/docs/design.md「ブラウザはバックエンドを直接呼び出す」)。
+    frontend の API_URL に渡す相対URL。アクセス元のIPまたはドメインに関係なく
+    同一オリジンの /api/ を使い、LB-Bへ中継する。
   EOT
-  value       = "http://${local.lb_b_vip}:${var.dsr_lb_port}"
+  value       = "/api"
+}
+
+output "frontend_ip" {
+  description = "frontend HTTPS 用のグローバル VIP。"
+  value       = local.lb_a_vip
+}
+
+output "api_ip" {
+  description = "API HTTPS 用のグローバル VIP。"
+  value       = local.lb_b_vip
 }
 
 output "bastion_public_ip" {

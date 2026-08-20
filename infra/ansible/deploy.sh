@@ -20,6 +20,8 @@ BASTION_IP="$(terraform -chdir="${TERRAFORM_DIR}" output -raw bastion_public_ip)
 # ここで拾ったものが bootstrap.yml 経由で controller の group_vars/app.yml と
 # インベントリに流れ、site.yml の netplan / compose まで届く。
 APP_URL="$(terraform -chdir="${TERRAFORM_DIR}" output -raw app_url)"
+FRONTEND_IP="$(terraform -chdir="${TERRAFORM_DIR}" output -raw frontend_ip)"
+API_IP="$(terraform -chdir="${TERRAFORM_DIR}" output -raw api_ip)"
 API_URL="$(terraform -chdir="${TERRAFORM_DIR}" output -raw api_url)"
 NODE_PRIVATE_IPS="$(terraform -chdir="${TERRAFORM_DIR}" output -json node_private_ips)"
 NODE_PUBLIC_IPS="$(terraform -chdir="${TERRAFORM_DIR}" output -json node_public_ips)"
@@ -36,6 +38,8 @@ TF_EXTRA_VARS="$(cat <<JSON
 {
   "app_url": "${APP_URL}",
   "api_url": "${API_URL}",
+  "tls_frontend_name": "${FRONTEND_IP}",
+  "tls_api_name": "${API_IP}",
   "node_private_ips": ${NODE_PRIVATE_IPS},
   "node_public_ips": ${NODE_PUBLIC_IPS},
   "node_roles": ${NODE_ROLES},

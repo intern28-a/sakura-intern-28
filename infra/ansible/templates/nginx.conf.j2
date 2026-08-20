@@ -1,0 +1,106 @@
+# site.yml が生成する。TLS は node 側で終端し、コンテナへは localhost の HTTP で転送する。
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ tls_server_names | join(' ') }};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {{ tls_name }};
+
+    ssl_certificate     /etc/sakuravel/tls/{{ tls_name }}/fullchain.pem;
+    ssl_certificate_key /etc/sakuravel/tls/{{ tls_name }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+{% if tls_role == 'frontend' %}
+    # API は同一オリジンの /api/ として中継する。これにより、
+    # frontend を変更できない環境でも session_id Cookie が送信される。
+    # /api/config は frontend 自身の実行時設定エンドポイントなので除外する。
+    location = /api/config {
+        proxy_pass http://127.0.0.1:{{ frontend_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /api/ {
+        proxy_pass https://{{ lb_api.vip }}/;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+{% endif %}
+    location / {
+        proxy_pass http://127.0.0.1:{{ frontend_port if tls_role == 'frontend' else api_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+{% if tls_role == 'frontend' and tls_domain_names | length > 0 %}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {{ tls_domain_names | join(' ') }};
+
+    ssl_certificate     /etc/sakuravel/tls/{{ tls_domain_cert_name }}/fullchain.pem;
+    ssl_certificate_key /etc/sakuravel/tls/{{ tls_domain_cert_name }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location = /api/config {
+        proxy_pass http://127.0.0.1:{{ frontend_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /api/ {
+        proxy_pass https://{{ lb_api.vip }}/;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ frontend_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+{% endif %}

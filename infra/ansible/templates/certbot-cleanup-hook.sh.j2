@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+token="${CERTBOT_TOKEN:?CERTBOT_TOKEN is required}"
+rm -f "/var/www/certbot/.well-known/acme-challenge/${token}"
+ssh -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new "ubuntu@{{ tls_peer_ip }}" \
+  "sudo rm -f '/var/www/certbot/.well-known/acme-challenge/${token}'"

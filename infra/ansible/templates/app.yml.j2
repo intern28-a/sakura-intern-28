@@ -2,11 +2,13 @@
 # bootstrap.yml が Terraform の出力から生成する。手で編集しない。
 # 秘密情報は group_vars/all.yml 側に置くこと (このファイルは毎回上書きされる)。
 
-# アプリの入口。どちらもロードバランサの VIP を指す。
+# アプリの入口。app_url はfrontend VIP、api_url は同一オリジンの相対パス。
 #   app_url: ブラウザがアクセスする frontend
-#   api_url: frontend が /api/config で返し、ブラウザが直接叩く api
+#   api_url: frontend が /api/config で返す同一オリジンの API パス
 app_url: {{ app_url | to_json }}
 api_url: {{ api_url | to_json }}
+tls_frontend_name: {{ tls_frontend_name | to_json }}
+tls_api_name: {{ tls_api_name | to_json }}
 
 app_net_cidr: {{ app_net_cidr | to_json }}
 
