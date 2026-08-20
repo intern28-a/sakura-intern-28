@@ -40,7 +40,7 @@ chmod 644 ~/.ssh/intern28.pub
 Terraform用のローカルファイルを作成します。このファイルはGitへコミットしません。
 
 ```bash
-cd ../terraform
+cd ./terraform
 cp secret.auto.tfvars.example secret.auto.tfvars
 ```
 
