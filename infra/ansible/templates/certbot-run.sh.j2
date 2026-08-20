@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+exec docker run --rm --network host --name sakuravel-certbot \
+  -v /etc/letsencrypt:/etc/letsencrypt \
+  -v /var/www/certbot:/var/www/certbot \
+  -v /etc/sakuravel/tls:/etc/sakuravel/tls \
+  -v /home/ubuntu/.ssh/intern28:/home/ubuntu/.ssh/intern28:ro \
+  -v /usr/local/sbin/sakuravel-certbot-auth:/usr/local/sbin/sakuravel-certbot-auth:ro \
+  -v /usr/local/sbin/sakuravel-certbot-cleanup:/usr/local/sbin/sakuravel-certbot-cleanup:ro \
+  -v /usr/local/sbin/sakuravel-certbot-deploy:/usr/local/sbin/sakuravel-certbot-deploy:ro \
+  sakuravel-certbot:latest "$@"

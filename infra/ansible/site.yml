@@ -5,6 +5,15 @@
   vars:
     app_dir: /opt/sakuravel
 
+    tls_role: "{{ 'frontend' if inventory_hostname in groups['frontend'] else 'api' }}"
+    tls_name: "{{ tls_frontend_name if tls_role == 'frontend' else tls_api_name }}"
+    tls_peer: "{{ (groups[tls_role] | difference([inventory_hostname]) | first) }}"
+    tls_peer_ip: "{{ node_private_ips[tls_peer] }}"
+    tls_is_leader: "{{ inventory_hostname == groups[tls_role][0] }}"
+    tls_domain_cert_name: "{{ tls_role }}-domains"
+    tls_domain_names: "{{ tls_domains | default([]) }}"
+    tls_server_names: "{{ [tls_name] + (tls_domain_names if tls_role == 'frontend' else []) }}"
+
     # このノードが lo に持つ VIP。役割で向き先のロードバランサが変わる。
     node_vip: "{{ lb_frontend.vip if inventory_hostname in groups['frontend'] else lb_api.vip }}"
 
@@ -23,6 +32,290 @@
         echo "timed out waiting for apt locks" >&2
         exit 1
       changed_when: false
+
+    - name: Install nginx and certificate tooling prerequisites
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - openssl
+        state: present
+        update_cache: true
+
+    - name: Create TLS and ACME directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/sakuravel/tls/{{ tls_name }}
+        - /var/www/certbot/.well-known/acme-challenge
+
+    - name: Create domain TLS directory on frontend nodes
+      ansible.builtin.file:
+        path: /etc/sakuravel/tls/{{ tls_domain_cert_name }}
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - tls_role == 'frontend'
+        - tls_domain_names | length > 0
+
+    - name: Create temporary self-signed certificate before ACME issuance
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1
+          -keyout /etc/sakuravel/tls/{{ tls_name }}/privkey.pem
+          -out /etc/sakuravel/tls/{{ tls_name }}/fullchain.pem
+          -subj /CN={{ tls_name }}
+        creates: /etc/sakuravel/tls/{{ tls_name }}/fullchain.pem
+
+    - name: Create temporary domain certificate before ACME issuance
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1
+          -keyout /etc/sakuravel/tls/{{ tls_domain_cert_name }}/privkey.pem
+          -out /etc/sakuravel/tls/{{ tls_domain_cert_name }}/fullchain.pem
+          -subj /CN={{ tls_domain_names[0] }}
+        creates: /etc/sakuravel/tls/{{ tls_domain_cert_name }}/fullchain.pem
+      when:
+        - tls_role == 'frontend'
+        - tls_domain_names | length > 0
+
+    - name: Render nginx TLS reverse proxy
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/sakuravel.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: nginx_conf
+
+    - name: Enable nginx TLS reverse proxy
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/sakuravel.conf
+        dest: /etc/nginx/sites-enabled/sakuravel.conf
+        state: link
+      register: nginx_link
+
+    - name: Remove nginx default site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      register: nginx_default
+
+    - name: Validate nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Enable and restart nginx
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: restarted
+      when: nginx_conf.changed or nginx_link.changed or nginx_default.changed
+
+    - name: Install Docker before building the Certbot image
+      ansible.builtin.shell: bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
+      args:
+        creates: /usr/bin/docker
+
+    - name: Enable Docker before running Certbot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Verify Docker is available
+      ansible.builtin.command: docker --version
+      changed_when: false
+
+    - name: Verify Docker Compose V2 is available
+      ansible.builtin.command: docker compose version
+      changed_when: false
+
+    - name: Copy SSH key for certificate synchronization
+      ansible.builtin.copy:
+        src: /home/ubuntu/.ssh/intern28
+        dest: /home/ubuntu/.ssh/intern28
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+      when: tls_is_leader | bool
+
+    - name: Install Certbot authentication hook on certificate leader
+      ansible.builtin.template:
+        src: certbot-auth-hook.sh.j2
+        dest: /usr/local/sbin/sakuravel-certbot-auth
+        owner: root
+        group: root
+        mode: '0755'
+      when: tls_is_leader | bool
+
+    - name: Install Certbot cleanup hook on certificate leader
+      ansible.builtin.template:
+        src: certbot-cleanup-hook.sh.j2
+        dest: /usr/local/sbin/sakuravel-certbot-cleanup
+        owner: root
+        group: root
+        mode: '0755'
+      when: tls_is_leader | bool
+
+    - name: Install Certbot deploy hook on certificate leader
+      ansible.builtin.template:
+        src: certbot-deploy-hook.sh.j2
+        dest: /usr/local/sbin/sakuravel-certbot-deploy
+        owner: root
+        group: root
+        mode: '0755'
+      when: tls_is_leader | bool
+
+    - name: Install the Certbot container runner on certificate leader
+      ansible.builtin.template:
+        src: certbot-run.sh.j2
+        dest: /usr/local/sbin/sakuravel-certbot-run
+        owner: root
+        group: root
+        mode: '0755'
+      when: tls_is_leader | bool
+
+    - name: Create Certbot image build context
+      ansible.builtin.file:
+        path: /opt/sakuravel-ansible
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: tls_is_leader | bool
+
+    - name: Render the Certbot container Dockerfile on certificate leader
+      ansible.builtin.template:
+        src: certbot.Dockerfile.j2
+        dest: /opt/sakuravel-ansible/certbot.Dockerfile
+        owner: root
+        group: root
+        mode: '0644'
+      register: certbot_dockerfile
+      when: tls_is_leader | bool
+
+    - name: Check for the Certbot container image on certificate leader
+      ansible.builtin.command: docker image inspect sakuravel-certbot:latest
+      register: certbot_image
+      changed_when: false
+      failed_when: false
+      when: tls_is_leader | bool
+
+    - name: Build the Certbot container image on certificate leader
+      ansible.builtin.command:
+        cmd: >-
+          docker build --pull -t sakuravel-certbot:latest
+          -f /opt/sakuravel-ansible/certbot.Dockerfile /opt/sakuravel-ansible
+      when:
+        - tls_is_leader | bool
+        - certbot_dockerfile.changed or certbot_image.rc != 0
+
+    - name: Check whether the trusted certificate has been issued
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/live/{{ tls_name }}/fullchain.pem
+      register: trusted_certificate
+
+    - name: Check whether the trusted domain certificate has been issued
+      ansible.builtin.stat:
+        path: /etc/letsencrypt/live/{{ tls_domain_cert_name }}/fullchain.pem
+      register: trusted_domain_certificate
+      when:
+        - tls_role == 'frontend'
+        - tls_domain_names | length > 0
+
+    - name: Issue and configure the initial certificate on the leader
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/sbin/sakuravel-certbot-run certonly --non-interactive --agree-tos
+          --manual --preferred-challenges http
+          --manual-auth-hook /usr/local/sbin/sakuravel-certbot-auth
+          --manual-cleanup-hook /usr/local/sbin/sakuravel-certbot-cleanup
+          --deploy-hook "/usr/local/sbin/sakuravel-certbot-deploy {{ tls_name }}"
+          --keep-until-expiring --cert-name {{ tls_name }}
+          --preferred-profile shortlived --ip-address {{ tls_name }}
+      register: initial_certificate
+      when:
+        - tls_is_leader | bool
+        - not trusted_certificate.stat.exists
+      no_log: true
+
+    - name: Issue and configure the initial domain certificate on the frontend leader
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/sbin/sakuravel-certbot-run certonly --non-interactive --agree-tos
+          --manual --preferred-challenges http
+          --manual-auth-hook /usr/local/sbin/sakuravel-certbot-auth
+          --manual-cleanup-hook /usr/local/sbin/sakuravel-certbot-cleanup
+          --deploy-hook "/usr/local/sbin/sakuravel-certbot-deploy {{ tls_domain_cert_name }}"
+          --keep-until-expiring --cert-name {{ tls_domain_cert_name }}
+          {% for domain in tls_domain_names %}--domain {{ domain }} {% endfor %}
+      register: initial_domain_certificate
+      when:
+        - tls_role == 'frontend'
+        - tls_is_leader | bool
+        - tls_domain_names | length > 0
+        - not trusted_domain_certificate.stat.exists
+      no_log: true
+
+    - name: Reload nginx after initial certificate issuance
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      when:
+        - tls_is_leader | bool
+        - >-
+          (initial_certificate is defined and initial_certificate.changed) or
+          (initial_domain_certificate is defined and initial_domain_certificate.changed)
+
+    - name: Install Certbot renewal service on certificate leader
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sakuravel-certbot-renew.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Renew Sakuravel TLS certificates
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c '/usr/local/sbin/sakuravel-certbot-run renew --quiet && /bin/systemctl reload nginx'
+      when: tls_is_leader | bool
+      register: certbot_service
+
+    - name: Install Certbot renewal timer on certificate leader
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sakuravel-certbot-renew.timer
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Renew Sakuravel TLS certificates daily
+
+          [Timer]
+          OnCalendar=daily
+          RandomizedDelaySec=1h
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      when: tls_is_leader | bool
+      register: certbot_timer
+
+    - name: Enable Certbot renewal timer on certificate leader
+      ansible.builtin.systemd:
+        name: sakuravel-certbot-renew.timer
+        enabled: true
+        state: started
+        daemon_reload: "{{ certbot_service.changed or certbot_timer.changed }}"
+      when: tls_is_leader | bool
 
     # ------------------------------------------------------------------
     # ネットワーク: ルータ+スイッチ側NICの設定と DSR 実サーバ設定
@@ -178,19 +471,6 @@
       run_once: true
       no_log: true
 
-    - name: Install Docker when it is not already installed
-      ansible.builtin.shell: bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
-      args:
-        creates: /usr/bin/docker
-
-    - name: Verify Docker is available
-      ansible.builtin.command: docker --version
-      changed_when: false
-
-    - name: Verify Docker Compose V2 is available
-      ansible.builtin.command: docker compose version
-      changed_when: false
-
     - name: Login to the private container registry
       ansible.builtin.command:
         cmd: docker login {{ registry_host }} --username {{ registry_username }} --password-stdin
@@ -199,12 +479,6 @@
         - registry_username is defined
         - registry_password is defined
       no_log: true
-
-    - name: Enable Docker
-      ansible.builtin.service:
-        name: docker
-        state: started
-        enabled: true
 
     - name: Create application directory
       ansible.builtin.file:
