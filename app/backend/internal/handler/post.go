@@ -4,7 +4,39 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sakuravel/internal/ranking"
 )
+
+// scanIDs は ID 1列だけを返すクエリの結果を読み取る。
+func scanIDs(rows *sql.Rows) ([]int64, error) {
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// recommendedLive はランキングを使わず、その場で直近24時間のいいねを集約する。
+// ランキングの範囲外の深いページと、ランキングが未生成のときに使う。
+func (h *Handler) recommendedLive(r *http.Request, perPage, offset int) (*sql.Rows, error) {
+	return h.DB.QueryContext(r.Context(), `
+		SELECT p.id
+		FROM posts p
+		LEFT JOIN (
+			SELECT post_id, COUNT(*) AS c
+			FROM likes
+			WHERE created_at > NOW() - INTERVAL 24 HOUR
+			GROUP BY post_id
+		) l ON l.post_id = p.id
+		WHERE p.parent_post_id IS NULL
+		ORDER BY COALESCE(l.c, 0) DESC, p.created_at DESC, p.id DESC
+		LIMIT ? OFFSET ?
+	`, perPage, offset)
+}
 
 func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	myID, _ := h.currentUserID(r)
@@ -29,15 +61,18 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 			`SELECT COUNT(*) FROM posts WHERE parent_post_id IS NULL`,
 		)
 	case "recommended":
-		rows, err = h.DB.QueryContext(r.Context(), `
-			SELECT p.id
-			FROM posts p
-			LEFT JOIN likes l ON l.post_id = p.id AND l.created_at > NOW() - INTERVAL 24 HOUR
-			WHERE p.parent_post_id IS NULL
-			GROUP BY p.id, p.user_id, p.content, p.is_repost, p.original_post_id, p.created_at
-			ORDER BY COUNT(l.post_id) DESC, p.created_at DESC, p.id DESC
-			LIMIT ? OFFSET ?
-		`, perPage, offset)
+		// いいねの集約は EVENT が定期的に post_ranking へ書き出している。
+		// 上位 TopN 件はそこを順位で引くだけで済む。
+		if offset+perPage <= ranking.TopN {
+			rows, err = h.DB.QueryContext(r.Context(), `
+				SELECT post_id FROM post_ranking
+				WHERE window_key = ?
+				ORDER BY rank_pos
+				LIMIT ? OFFSET ?
+			`, ranking.Window24h, perPage, offset)
+		} else {
+			rows, err = h.recommendedLive(r, perPage, offset)
+		}
 		totalRow = h.DB.QueryRowContext(r.Context(),
 			`SELECT COUNT(*) FROM posts WHERE parent_post_id IS NULL`,
 		)
@@ -66,18 +101,26 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+	ids, err := scanIDs(rows)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "server error")
+		return
+	}
+
+	// EVENT がまだ一度も走っていないと post_ranking は空になる。
+	// その場合はその場で集約して返す（DB 作成直後や EVENT 停止時の保険）。
+	if feed == "recommended" && len(ids) == 0 && offset == 0 {
+		liveRows, liveErr := h.recommendedLive(r, perPage, offset)
+		if liveErr != nil {
 			h.respondError(w, http.StatusInternalServerError, "server error")
 			return
 		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		h.respondError(w, http.StatusInternalServerError, "server error")
-		return
+		defer liveRows.Close()
+		ids, err = scanIDs(liveRows)
+		if err != nil {
+			h.respondError(w, http.StatusInternalServerError, "server error")
+			return
+		}
 	}
 
 	fetched, err := h.fetchPostsByIDs(r, ids, myID)
