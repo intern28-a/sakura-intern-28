@@ -120,8 +120,13 @@ VM作成後、次のコマンドを実行します。
 ```
 
 ## トラブルシューティング
-1. terraform　apply実行中にリソース上限のエラーが発生した場合は
+1. terraform　apply実行中にリソース上限のエラーが発生した場合
 ```bash
 terraform destroy
 ```
 を実行してから，不要なリソースが残っていないかを確認してください
+
+2. ansibleの実行中にssh接続のエラーが発生した場合
+WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! のような表示があれば，
+`~/.ssh/known_hosts`
+を編集して，該当するドメインに関する記述を削除してください
