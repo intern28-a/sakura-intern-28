@@ -7,18 +7,14 @@ services:
     image: {{ registry_host }}/intern2026-app-backend:latest
     platform: linux/amd64
     ports:
-      - "{{ api_port }}:{{ api_port }}"
+      - "127.0.0.1:{{ api_port }}:{{ api_port }}"
     environment:
       DATABASE_URL: {{ (db_user ~ ':' ~ db_password ~ '@tcp(' ~ db_host ~ ':' ~ (db_port | string) ~ ')/' ~ db_name ~ '?parseTime=true&charset=utf8mb4') | to_json }}
       PORT: {{ api_port | string | to_json }}
-      # ブラウザは frontend のオリジンから api を直接叩く
-      # (app/backend/docs/design.md「ブラウザはバックエンドを直接呼び出す」)。
-      # 未設定だと cmd/api/main.go のフォールバックで http://localhost:3000 のみ
-      # 許可になり、API 呼び出しが全部 CORS でブロックされる。
+      # frontend nginx の /api/ 中継経由でブラウザから呼び出される。
       ALLOWED_ORIGIN: {{ app_url | to_json }}
-      # HTTP 運用なので false。HTTPS 化したら true にして
-      # セッションCookieに Secure + SameSite=None を付ける。
-      COOKIE_SECURE: "false"
+      # HTTPS運用なのでSecure + SameSite=Noneを付ける。
+      COOKIE_SECURE: "true"
     restart: on-failure
 {% endif %}
 {% if inventory_hostname in groups['frontend'] | default([]) %}
@@ -26,9 +22,9 @@ services:
     image: {{ registry_host }}/intern2026-app-frontend:latest
     platform: linux/amd64
     ports:
-      - "{{ frontend_port }}:{{ frontend_port }}"
+      - "127.0.0.1:{{ frontend_port }}:{{ frontend_port }}"
     environment:
-      # ブラウザに渡されるURL。api は同居していないので LB-B の VIP を指す。
+      # ブラウザに渡される同一オリジンのAPIパス。
       API_URL: {{ api_url | to_json }}
     restart: on-failure
 {% endif %}

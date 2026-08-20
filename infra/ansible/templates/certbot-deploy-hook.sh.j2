@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+name="${1:?certificate name is required}"
+src="/etc/letsencrypt/live/${name}"
+dst="/etc/sakuravel/tls/${name}"
+install -D -m 0644 "${src}/fullchain.pem" "${dst}/fullchain.pem"
+install -D -m 0600 "${src}/privkey.pem" "${dst}/privkey.pem"
+scp -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new \
+  "${src}/fullchain.pem" "ubuntu@{{ tls_peer_ip }}:/tmp/${name}.fullchain.pem"
+scp -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new \
+  "${src}/privkey.pem" "ubuntu@{{ tls_peer_ip }}:/tmp/${name}.privkey.pem"
+ssh -q -i /home/ubuntu/.ssh/intern28 -o StrictHostKeyChecking=accept-new "ubuntu@{{ tls_peer_ip }}" \
+  "sudo install -D -m 0644 '/tmp/${name}.fullchain.pem' '${dst}/fullchain.pem' && sudo install -D -m 0600 '/tmp/${name}.privkey.pem' '${dst}/privkey.pem' && sudo rm -f '/tmp/${name}.fullchain.pem' '/tmp/${name}.privkey.pem' && sudo systemctl reload nginx"

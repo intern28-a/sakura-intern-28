@@ -12,7 +12,7 @@
     db_user: sakuravel_app
 
     # 以下は deploy.sh が Terraform の出力から -e で渡す。ここには書かない。
-    #   app_url / api_url        アプリの入口 (LB-A / LB-B の VIP)
+    #   app_url / api_url        アプリの入口と同一オリジンAPIパス
     #   node_private_ips         ノード名 → app セグメントのIP
     #   node_public_ips          ノード名 → ルータ+スイッチ側のグローバルIP
     #   node_roles               ノード名 → frontend / api
@@ -74,10 +74,13 @@
       no_log: true
 
     - name: Scan application node SSH host keys
-      ansible.builtin.command: "ssh-keyscan -H {{ item }}"
+      ansible.builtin.command: "ssh-keyscan -T 5 -H {{ item }}"
       loop: "{{ app_private_ips }}"
       register: app_host_keys
       changed_when: false
+      retries: 30
+      delay: 10
+      until: app_host_keys.rc == 0 and app_host_keys.stdout | length > 0
 
     - name: Register application node SSH host keys
       ansible.builtin.known_hosts:
@@ -112,9 +115,16 @@
         - { src: "{{ playbook_dir }}/templates/inventory.private.ini.j2", dest: "templates/inventory.private.ini.j2" }
         - { src: "{{ playbook_dir }}/templates/compose.yml.j2", dest: "templates/compose.yml.j2" }
         - { src: "{{ playbook_dir }}/templates/netplan.yaml.j2", dest: "templates/netplan.yaml.j2" }
+        - { src: "{{ playbook_dir }}/templates/nginx.conf.j2", dest: "templates/nginx.conf.j2" }
+        - { src: "{{ playbook_dir }}/templates/certbot-auth-hook.sh.j2", dest: "templates/certbot-auth-hook.sh.j2" }
+        - { src: "{{ playbook_dir }}/templates/certbot-cleanup-hook.sh.j2", dest: "templates/certbot-cleanup-hook.sh.j2" }
+        - { src: "{{ playbook_dir }}/templates/certbot-deploy-hook.sh.j2", dest: "templates/certbot-deploy-hook.sh.j2" }
+        - { src: "{{ playbook_dir }}/templates/certbot-run.sh.j2", dest: "templates/certbot-run.sh.j2" }
+        - { src: "{{ playbook_dir }}/templates/certbot.Dockerfile.j2", dest: "templates/certbot.Dockerfile.j2" }
         - { src: "{{ playbook_dir }}/group_vars/all.yml", dest: "group_vars/all.yml" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/001_init.sql", dest: "migrations/001_init.sql" }
         - { src: "{{ playbook_dir }}/../../app/backend/migrations/002_add_idx.sql", dest: "migrations/002_add_idx.sql" }
+        - { src: "{{ playbook_dir }}/../../app/backend/migrations/003_add_fk.sql", dest: "migrations/003_add_fk.sql" }
         - { src: "{{ playbook_dir }}/scripts/run-migrations.sh", dest: "scripts/run-migrations.sh" }
 
     - name: Render private inventory for the application nodes

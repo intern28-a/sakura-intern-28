@@ -64,6 +64,22 @@ resource "sakura_packet_filter_rules" "node" {
       description      = "service port (via LB VIP and health check)"
     },
     {
+      protocol         = "tcp"
+      source_network   = null
+      source_port      = null
+      destination_port = "80"
+      allow            = true
+      description      = "HTTP redirect and ACME HTTP-01 challenge"
+    },
+    {
+      protocol         = "tcp"
+      source_network   = null
+      source_port      = null
+      destination_port = "443"
+      allow            = true
+      description      = "HTTPS"
+    },
+    {
       protocol         = "icmp"
       source_network   = null
       source_port      = null
