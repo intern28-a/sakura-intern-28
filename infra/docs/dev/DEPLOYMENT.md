@@ -11,20 +11,49 @@
 - Terraform
 - Ansible（`ansible-playbook`）
 - OpenSSH（`ssh`、`ssh-keygen`）
+- Docker
 - さくらのクラウドのAPIトークンとシークレット
 - 1Passwordに登録されたVM初期パスワード、Managed DBパスワード、コンテナレジストリ認証情報
 
-以降のコマンドは、リポジトリの `infra` ディレクトリを基準にしています。
-
+## 2. コンテナレジストリへのイメージ登録
+レジストリへのログイン
 ```bash
-cd infra
+$ cd sakura-intern-28/app/backend
+$ docker login <作成したコンテナレジストリのホスト名>
+Username: [1Password記載の コンテナレジストリ ユーザ名(新規作成用) ]
+Password: [1Password記載の コンテナレジストリ パスワード(新規作成用)]
+Login Succeeded
 ```
 
-## 2. SSH鍵を準備する（手動作業）
+apiイメージのpush
+```bash
+docker buildx build \
+--platform linux/amd64 \
+-t <作成したコンテナレジストリのホスト名>/intern2026-app-backend:latest \
+--push \
+.
+```
 
-`deploy.sh` は、作業端末の `~/.ssh/intern28` をnode-01へ転送し、node-01からnode-02〜05へ接続します。
+フロントイメージのpullとpush
+* ログイン（参加者用）
+```bash
+docker login intern22.sakuracr.jp
+Username: guest
+Password: [1Password記載の コンテナレジストリ(参加者用)]
+Login Succeeded
+```
 
-鍵がまだない場合だけ作成します。
+* イメージのpull
+```bash
+docker pull --platform linux/amd64 intern22.sakuracr.jp/intern2026-app-frontend:latest
+```
+* イメージのpush
+```bash
+docker tag intern22.sakuracr.jp/intern2026-app-frontend:latest <作成したコンテナレジストリのホスト名>/intern2026-app-frontend:latest
+docker push <作成したコンテナレジストリのホスト名>/intern2026-app-frontend:latest
+```
+
+## 3. SSH鍵を準備する
 
 ```bash
 mkdir -p ~/.ssh
@@ -35,7 +64,7 @@ chmod 644 ~/.ssh/intern28.pub
 
 すでに `~/.ssh/intern28` がある場合は、上書きしないでください。
 
-## 3. Terraformのシークレットを設定する（手動作業）
+## 4. Terraformのシークレットを設定する
 
 Terraform用のローカルファイルを作成します。このファイルはGitへコミットしません。
 
@@ -70,7 +99,7 @@ terraform apply
 terraform output -raw bastion_public_ip
 ```
 
-## 4. Ansibleの認証情報を設定する（手動作業）
+## 5. Ansibleの認証情報を設定する
 
 Ansibleの認証情報ファイルを作成します。このファイルもGitへコミットしません。
 
@@ -111,7 +140,7 @@ IPアドレス用証明書だけが発行され、DNS設定は必要ありませ
 
 認証情報を含むファイルを表示・共有・コミットしないでください。
 
-## 5. アプリケーションをデプロイする（自動実行）
+## 6. アプリケーションをデプロイする
 
 VM作成後、次のコマンドを実行します。
 
