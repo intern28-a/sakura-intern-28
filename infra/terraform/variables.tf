@@ -19,7 +19,7 @@ variable "sakura_access_token_secret" {
 variable "zone" {
   description = "リソースを作成するゾーン。tk1a / tk1b / is1a / is1b / is1c から選択。"
   type        = string
-  default     = "tk1a"
+  default     = "is1b"
 }
 
 ########################################
