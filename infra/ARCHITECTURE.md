@@ -2,9 +2,10 @@
 
 さくらのクラウド `tk1a` ゾーン上に Terraform で構築している。このドキュメントは `infra/terraform` の実際の定義と、構築後の実機確認から起こしたもの。プライベートアドレスやポートは変数のデフォルト値。
 
-以下に書いてあるグローバルIPは **2026-08-19 時点で実際に払い出され、疎通確認まで済ませた値**。
+以下に書いてあるグローバルIPは、払い出し済みの `27.133.144.64/28` に **LB 冗長化後の割り当て順**を当てはめたもの。
 さくら側から払い出されるものなので、ルータ+スイッチやサーバを作り直すと変わる。
-最新の値は `terraform output` で確認する（`pub_network` / `node_public_ips` / `lb_frontend` / `lb_api` / `app_url` / `api_url`）。
+また LB を冗長化した際に本体アドレスが LB あたり 2 個に増え、以降のアドレスが 2 つずつ後ろへずれている（下の「IP 割り当て」を参照）。
+実際の値は apply 後に `terraform output` で確認する（`pub_network` / `node_public_ips` / `lb_frontend` / `lb_api` / `app_url` / `api_url`）。
 
 ## 全体図
 
@@ -17,12 +18,12 @@ graph TB
     end
 
     subgraph pub["ルータ+スイッチ / 27.133.144.64/28 (GW .65)"]
-        lba["<b>LB-A</b> .68<br/>VIP .69:3000"]
-        lbb["<b>LB-B</b> .70<br/>VIP .71:8080"]
-        n2p["node-02 .72"]
-        n3p["node-03 .73"]
-        n4p["node-04 .74"]
-        n5p["node-05 .75"]
+        lba["<b>LB-A</b> 冗長2台 .68/.69<br/>VIP .70:443"]
+        lbb["<b>LB-B</b> 冗長2台 .71/.72<br/>VIP .73:443"]
+        n2p["node-02 .74"]
+        n3p["node-03 .75"]
+        n4p["node-04 .76"]
+        n5p["node-05 .77"]
     end
 
     subgraph app["app スイッチ / 192.168.1.0/24 (ルータなし)"]
@@ -34,8 +35,8 @@ graph TB
         db[("MariaDB 10.11<br/>db .30:3306")]
     end
 
-    client -->|"HTML/JS :3000"| lba
-    client -->|"API :8080"| lbb
+    client -->|"HTTPS :443"| lba
+    n2p -->|"/api/ を中継 (HTTPS :443)"| lbb
 
     lba -->|"宛先MACのみ書換"| n2p
     lba --> n3p
@@ -62,19 +63,20 @@ graph TB
 ```
                         インターネット (ブラウザ)
                               │
-              :3000 ──────────┴────────── :8080
+               :443 ──────────┴────────── :443
                 │                            │
          ┌──────┴──────┐              ┌──────┴──────┐
          │    LB-A     │              │    LB-B     │
-         │  本体 .68   │              │  本体 .70   │
-         │  VIP  .69   │              │  VIP  .71   │
+         │ 本体 .68/.69│              │ 本体 .71/.72│
+         │  (VRRP 冗長)│              │  (VRRP 冗長)│
+         │  VIP  .70   │              │  VIP  .73   │
          └──────┬──────┘              └──────┬──────┘
                 │ 実サーバ                    │ 実サーバ
        ┌────────┴────────┐          ┌────────┴────────┐
        │                 │          │                 │
    ┌───┴────┐       ┌────┴───┐  ┌───┴────┐       ┌────┴───┐
    │node-02 │       │node-03 │  │node-04 │       │node-05 │
-   │.72/.12 │       │.73/.13 │  │.74/.14 │       │.75/.15 │
+   │.74/.12 │       │.75/.13 │  │.76/.14 │       │.77/.15 │
    │frontend│       │frontend│  │  api   │       │  api   │
    └───┬────┘       └────┬───┘  └───┬────┘       └────┬───┘
        └─────────────────┴─────┬────┴─────────────────┘
@@ -88,6 +90,9 @@ graph TB
               └──────────┘
               共有セグメント側に 59.106.208.113
 ```
+
+ブラウザが直接叩くのは LB-A (`:443`) だけ。LB-B (`:443`) へは frontend ノードの nginx が
+`/api/` を中継するので、上図の右の枝はブラウザからではなく frontend ノードからの経路になる。
 
 各ノードは NIC を 2 本持つ（接続順 = OS の enumeration 順）。
 
@@ -108,8 +113,8 @@ API が `Only the first interface can be connected to router+switches or shared 
 | ルータ+スイッチ | `sakura_internet.pub` | `pub-router` | /28 · 100 Mbps |
 | サーバ ×5 | `sakura_server.node[0..4]` | `edge`, `node-02`〜`05` | 4 core / 12 GB |
 | ディスク ×5 | `sakura_disk.node[0..4]` | `edge-disk`, `node-02-disk`〜 | HDD 100 GB |
-| ロードバランサ A | `sakura_dsr_lb.frontend` | `lb-frontend` | standard / DSR / VRID 1 |
-| ロードバランサ B | `sakura_dsr_lb.api` | `lb-api` | standard / DSR / VRID 2 |
+| ロードバランサ A | `sakura_dsr_lb.frontend` | `lb-frontend` | standard / DSR / VRID 1 / 冗長（実機2台） |
+| ロードバランサ B | `sakura_dsr_lb.api` | `lb-api` | standard / DSR / VRID 2 / 冗長（実機2台） |
 | パケットフィルタ ×2 | `sakura_packet_filter.node` | `pf-frontend`, `pf-api` | グローバル側NICに適用 |
 | データベース | `sakura_database.db` | `db` | MariaDB 10.11 / 10g |
 | SSH 公開鍵 | `sakura_ssh_key.foobar` | `localsshkey` | `~/.ssh/intern28.pub` |
@@ -130,26 +135,37 @@ API が `Only the first interface can be connected to router+switches or shared 
 
 ### ルータ+スイッチ `27.133.144.64/28`
 
-ゲートウェイは `27.133.144.65`。`sakura_internet.pub.ip_addresses`（払い出し可能アドレスの昇順リスト）の先頭から順に取る。/28 で 11 個払い出され、うち 8 個を使用。
+ゲートウェイは `27.133.144.65`。`sakura_internet.pub.ip_addresses`（払い出し可能アドレスの昇順リスト）の先頭から順に取る。/28 で 11 個払い出され、冗長構成では **うち 10 個を使用**（余りは 1 個だけ）。
 
 | index | アドレス | 用途 |
 |---|---|---|
-| 0 | 27.133.144.68 | LB-A 本体 |
-| 1 | **27.133.144.69** | **VIP-A**（frontend の受け口 :3000） |
-| 2 | 27.133.144.70 | LB-B 本体 |
-| 3 | **27.133.144.71** | **VIP-B**（api の受け口 :8080） |
-| 4 | 27.133.144.72 | node-02（frontend） |
-| 5 | 27.133.144.73 | node-03（frontend） |
-| 6 | 27.133.144.74 | node-04（api） |
-| 7 | 27.133.144.75 | node-05（api） |
-| 8 〜 10 | .76 〜 .78 | 未使用 |
+| 0 | 27.133.144.68 | LB-A 本体 1（アクティブ/スタンバイのいずれか） |
+| 1 | 27.133.144.69 | LB-A 本体 2 |
+| 2 | **27.133.144.70** | **VIP-A**（frontend の受け口 :443）※アクティブ側が保持 |
+| 3 | 27.133.144.71 | LB-B 本体 1 |
+| 4 | 27.133.144.72 | LB-B 本体 2 |
+| 5 | **27.133.144.73** | **VIP-B**（api の受け口 :443）※アクティブ側が保持 |
+| 6 | 27.133.144.74 | node-02（frontend） |
+| 7 | 27.133.144.75 | node-03（frontend） |
+| 8 | 27.133.144.76 | node-04（api） |
+| 9 | 27.133.144.77 | node-05（api） |
+| 10 | .78 | 未使用 |
 
-アプリの入口はこの2つ。
+インデックスは `var.dsr_lb_redundant` で変わる。非冗長（`false`）にすると LB 本体が 1 個ずつになり、
+`[0] LB-A 本体 / [1] VIP-A / [2] LB-B 本体 / [3] VIP-B / [4]〜 ノード` の 8 個構成に戻る。
+ノードを増やして 11 個で足りなくなる場合は `pub_netmask` を 27 に広げる（`sakura_dsr_lb` の
+`lifecycle.precondition` で apply 時に検知される）。
+
+アプリの入口はブラウザから見て frontend の VIP ひとつだけ。api は同一オリジンの `/api/` として中継される。
 
 ```
-frontend  http://27.133.144.69:3000     (terraform output app_url)
-api       http://27.133.144.71:8080     (terraform output api_url)
+frontend  https://27.133.144.70     (terraform output app_url)
+api       /api                      (terraform output api_url — 同一オリジンの相対パス)
 ```
+
+TLS は各ノードの nginx で終端する（LB は L4 なので終端できない）。
+LB-B の VIP `27.133.144.73:443` もグローバルに露出しているが、通常の経路では
+frontend ノードの nginx からしか叩かれない。
 
 edge はここには載らず、共有セグメント側に `59.106.208.113` を持つ。
 
@@ -170,11 +186,12 @@ LB の実サーバには含まれない。
 
 ### node-02 / node-03 — frontend
 
-`frontend` コンテナ（:3000）だけを動かす。LB-A の実サーバ。
+`frontend` コンテナ（`127.0.0.1:3000`）と、その前段の nginx（`:443`）を動かす。LB-A の実サーバ。
+nginx は `/api/` を LB-B へ中継する役も兼ねる。
 
 ### node-04 / node-05 — api
 
-`api` コンテナ（:8080）だけを動かす。LB-B の実サーバ。DB への接続は app スイッチ側 NIC を使う。
+`api` コンテナ（`127.0.0.1:8080`）と、その前段の nginx（`:443`）を動かす。LB-B の実サーバ。DB への接続は app スイッチ側 NIC を使う。
 
 ### DSR 方式に伴う共通設定
 
@@ -189,22 +206,31 @@ LB の実サーバには含まれない。
 ### ブラウザ → frontend
 
 ```
-クライアント     1.2.3.4:60000  → 27.133.144.69:3000  (VIP-A)
-LB-A             宛先MACのみ書換 → node-02:3000        (宛先IPは VIP のまま)
+クライアント     1.2.3.4:60000  → 27.133.144.70:443   (VIP-A)
+LB-A             宛先MACのみ書換 → node-02:443         (宛先IPは VIP のまま)
+node-02 nginx    TLS 終端         → 127.0.0.1:3000     (frontend コンテナ)
 実サーバ → クライアント（LB を経由せず直接返す = DSR）
 ```
 
 ### ブラウザ → api
 
-frontend は API を中継しない。`app/backend/docs/design.md` の通り、ブラウザが `/api/config` で受け取った `API_URL` を使ってバックエンドを直接呼び出す。そのため api 側の LB-B もグローバルに置いている。
+ブラウザは `/api/config` で `API_URL` = `/api`（相対パス）を受け取り、frontend と**同一オリジン**の `/api/` を叩く。
+frontend ノードの nginx がそれを LB-B へ中継する（`nginx.conf.j2` の `location ^~ /api/` → `proxy_pass https://<VIP-B>/`）。
+`app/backend/docs/design.md` には「ブラウザがバックエンドを直接呼び出す」とあるが、
+セッション Cookie を送るために同一オリジンへ寄せたので、現在は nginx が 1 段挟まる構成になっている。
 
 ```
-クライアント     1.2.3.4:60001  → 27.133.144.71:8080  (VIP-B)
-LB-B             宛先MACのみ書換 → node-04:8080
-実サーバ → クライアント（DSR）
+クライアント      1.2.3.4:60001  → 27.133.144.70:443   (VIP-A、/api/…)
+LB-A              宛先MACのみ書換 → node-02:443
+node-02 nginx     TLS 終端        → 27.133.144.73:443  (VIP-B へ中継 / proxy_ssl_verify off)
+LB-B              宛先MACのみ書換 → node-04:443
+node-04 nginx     TLS 終端        → 127.0.0.1:8080     (api コンテナ)
+実サーバ → 中継元へ（各区間で DSR）
 ```
 
-frontend と api でオリジンが異なるため、api 側に `ALLOWED_ORIGIN`（= `app_url`）を設定している。
+同一オリジンなので Cookie は素直に送られる。api 側の `ALLOWED_ORIGIN` には `app_url`（= `https://<VIP-A>`）を設定し、
+Cookie は HTTPS 前提で `COOKIE_SECURE=true`。
+VIP-B を直接叩くこともできるが、その場合はクロスオリジンになるため Cookie は送られない。
 
 ### 内部 → 外部（`docker pull` / `apt`）
 
@@ -220,15 +246,23 @@ node-02〜05 は自前のグローバルIPとデフォルトルートを持つ�
 |---|---|---|
 | Terraform | `sakura_dsr_lb.frontend` | `sakura_dsr_lb.api` |
 | 方式 | DSR (Direct Server Return) | 同左 |
-| 本体 | 27.133.144.68 | 27.133.144.70 |
-| VIP | **27.133.144.69**:3000 | **27.133.144.71**:8080 |
-| 実サーバ | node-02 (.72) / node-03 (.73) | node-04 (.74) / node-05 (.75) |
+| 冗長化 | あり（実機2台 / VRRP） | 同左 |
+| 本体 | 27.133.144.68 / 27.133.144.69 | 27.133.144.71 / 27.133.144.72 |
+| VIP | **27.133.144.70**（`:443` が実運用。`:80` `:3000` も定義） | **27.133.144.73**（`:443` が実運用。`:80` `:8080` も定義） |
+| 実サーバ | node-02 (.74) / node-03 (.75) | node-04 (.76) / node-05 (.77) |
 | ヘルスチェック | **TCP 接続確認のみ** | 同左 |
 | 監視間隔 | 10 秒（`delay_loop`） | 同左 |
 | タイムアウト / リトライ | 5 秒 / 3 回 | 同左 |
 | VRID | 1 | 2 |
 
-どちらも非冗長構成（`ip_addresses` は 1 つ）。同一セグメントに 2 台並ぶので VRID は重複させられない。
+どちらも冗長構成。`network_interface.ip_addresses` に本体アドレスを 2 つ渡すと、アプライアンス実機が 2 台作られて
+VRRP でアクティブ/スタンバイを組む（1 つなら実機 1 台の非冗長構成。プロバイダ側の上限は 2 つ）。
+VIP はアクティブ側だけが ARP に応答し、片系が落ちるとスタンバイが引き継ぐ。
+VRID は VRRP のグループ識別子なので、同一セグメントに並ぶ LB-A / LB-B で重複させられない。
+
+冗長・非冗長の切り替えは `var.dsr_lb_redundant` で行う。`network_interface` は `ip_addresses` を含め
+すべて `RequiresReplace` なので、切り替えると LB は作り直しになり、払い出しアドレスの割り当て順が
+ずれるぶん **VIP のアドレスも変わる**。DNS を張っている場合は apply 後に向き先を更新すること。
 
 LB アプライアンスの `network_interface` は単一のスイッチしか持てず、DSR は宛先MACだけを書き換える L2 転送なので、**実サーバは必ず LB と同一セグメントにいる必要がある**。node-02〜05 をルータ+スイッチに載せているのはこのため。
 
@@ -267,8 +301,11 @@ DSR では宛先が VIP のまま届き送信元はクライアントそのも�
 
 | コンテナ | ノード | ポート | 主な環境変数 |
 |---|---|---|---|
-| frontend | node-02 / 03 | 3000 | `API_URL` = `http://27.133.144.71:8080`（VIP-B） |
-| api | node-04 / 05 | 8080 | `DATABASE_URL`, `ALLOWED_ORIGIN` = `http://27.133.144.69:3000`（VIP-A）, `COOKIE_SECURE=false` |
+| frontend | node-02 / 03 | `127.0.0.1:3000` | `API_URL` = `/api`（同一オリジンの相対パス） |
+| api | node-04 / 05 | `127.0.0.1:8080` | `DATABASE_URL`, `ALLOWED_ORIGIN` = `https://27.133.144.70`（VIP-A）, `COOKIE_SECURE=true` |
+
+コンテナはループバックにだけ公開している。外部からの接続は必ず同じノードの nginx（`:443`）を経由し、
+そこで TLS を終端してからコンテナへ HTTP で転送される。
 
 アドレス・ポート・役割は Terraform の出力を単一の出典とし、`deploy.sh` → `bootstrap.yml` が controller 上に `group_vars/app.yml` を自動生成する。`group_vars/all.yml` には秘密情報だけを置く。
 
@@ -312,8 +349,8 @@ ssh -i ~/.ssh/intern28 -J ubuntu@59.106.208.113 ubuntu@192.168.1.12           # 
 リスナーがまだ無い状態では、**`Connection refused` が返れば許可、タイムアウトなら遮断**と判別できる。
 
 ```bash
-nc -vz 27.133.144.72 3000   # refused → 許可されている
-nc -vz 27.133.144.72 22     # timeout → 遮断されている
+nc -vz 27.133.144.74 3000   # refused → 許可されている
+nc -vz 27.133.144.74 22     # timeout → 遮断されている
 ```
 
 ### DSR 経路の確認方法
@@ -323,17 +360,18 @@ VIP に対して同じことをすると、**`Connection refused` が返って�
 転送されていなければタイムアウトになる。
 
 ```bash
-nc -vz 27.133.144.69 3000
+nc -vz 27.133.144.70 443
 ```
 
 ## 現状の制約・未対応
 
-1. **ログインが通らない。** frontend (`VIP-A:3000`) と api (`VIP-B:8080`) は別アドレスなので、ブラウザからは**別サイト**として扱われる。セッションCookie（`app/backend/internal/handler/auth.go`）が送信されないため、認証を伴う操作が成立しない。ドメインを取得して `app.example.jp` → VIP-A / `api.example.jp` → VIP-B の A レコードを当てれば、SameSite は登録可能ドメイン単位で判定するので same-site となり、**HTTPS 無しでも直る**（併せて `ALLOWED_ORIGIN` をホスト名に更新する）
+1. ~~**ログインが通らない。**~~ 対応済み。frontend ノードの nginx が `/api/` を LB-B へ中継して**同一オリジン**に寄せたため、セッション Cookie（`app/backend/internal/handler/auth.go`）が送信されるようになった。ブラウザは `/api/config` で `API_URL` = `/api`（相対パス）を受け取り、VIP-B を直接は叩かない。Cookie は HTTPS 前提で `COOKIE_SECURE=true`。残る制約として、**api への通信が frontend ノードの nginx を 1 段挟む**ぶんホップが増え、frontend ノードが api トラフィックの中継役も兼ねる（`app/backend/docs/design.md` の「ブラウザがバックエンドを直接呼び出す」とは異なる構成になっている）。VIP-B は依然グローバルに露出しており直接叩けるが、その場合はクロスオリジンなので Cookie は送られない
 2. **ヘルスチェックが TCP のみ。** docker が LISTEN してさえいれば健全と判定されるため、DB に繋がらず 500 を返すノードにも振り分けが続く。`GET /healthz` は実装済みだが中身がスタブで常に 200 を返すため、HTTP チェックに切り替えても判定能力は変わらない。DB 疎通確認を入れてから `network.tf` を `protocol = "http"` に変更する
-3. **ロードバランサが 2 台とも単一障害点。** それぞれ非冗長構成。冗長化するには `ip_addresses` を 2 つにして作り直す
-4. **サービスポートが全世界に開いている。** DSR の性質上、送信元では絞れない。LB を迂回して個別ノードを直接叩けるため、偏りを避けたい場合はアプリ側の対応が要る
-5. **HTTPS 未対応。** DSR LB は L4 なので TLS 終端できない。各ノードでの終端か、エンハンスドLB の前置が必要になる
-6. **cloud-init は初回起動時にしか走らない。** ネットワーク設定や DSR 周りを変更しても既存ノードには反映されないため、`infra/ansible/site.yml` 側にも同じ設定を持たせている。両方を更新すること
-7. **ディスクは 5 本が上限。** 作り直しを伴う変更は本数制限に当たりやすい。`-replace` を使う際は先に解放されるのを待つ必要がある
-8. **OS 内部のホスト名が Terraform 上の名前と一致しない場合がある。** cloud-init が hostname を適用するのは初回起動時のみのため、改名しても既存ノードには反映されない
-9. **ノードへの ping が返らない。** パケットフィルタに `allow icmp` を入れており API 側にも反映されている（`terraform state show 'sakura_packet_filter_rules.node["frontend"]'` で確認できる）が、実際には外部からの ICMP がノードに届かない。ルータ `.65` と両 VIP はパケットフィルタが無いため応答する。原因未特定。診断用のルールでサービスには影響しないが、**ノードの生死確認に ping は使えない**（上記「パケットフィルタの確認方法」の `nc` を使う）
+3. ~~**ロードバランサが 2 台とも単一障害点。**~~ 対応済み。LB-A / LB-B とも冗長構成（`ip_addresses` が 2 つ / VRRP）にした。ルータ+スイッチ の /28 は 11 個中 10 個を使い切っており、**ノードを増やす余地が無い**のが次の制約
+4. **データベースが単一障害点。** `sakura_database.db` 1 台構成で、マスタ側の `replica_user` / `replica_password_wo` も `sakura_database_read_replica` も未設定（`infra/terraform/database.tf`）。アプリ側も `db_host` 1 つを `DATABASE_URL` に埋めるだけで、参照/更新の振り分けを持たない。日次バックアップ（03:00・全曜日）があるので復旧はできるが、**障害時は復旧が終わるまでサービスが止まる**。プロバイダが用意しているのはリードレプリカ（マスタに `replica_user` / `replica_password_wo` を足し、`sakura_database_read_replica` を `master_id` 付きで追加する）で、LB の VRRP と違い**自動フェイルオーバーはしない**。昇格は手動で、アプリ側も `db_host` の向き先変更が要るため、これを入れても「読み取り分散と復旧手段の確保」に留まる。app セグメントは /24 でアドレスの余裕はあるので、LB のような枠の制約は無い
+5. **サービスポートが全世界に開いている。** DSR の性質上、送信元では絞れない。LB を迂回して個別ノードを直接叩けるため、偏りを避けたい場合はアプリ側の対応が要る
+6. ~~**HTTPS 未対応。**~~ 対応済み。DSR LB は L4 で TLS 終端できないため、**各ノードの nginx で終端**している（`infra/ansible/templates/nginx.conf.j2`）。証明書は Let's Encrypt を HTTP-01 チャレンジで取得し、ドメインを持たない VIP には**IP アドレス証明書**（`--ip-address` / `--preferred-profile shortlived`）を発行する。`tls_domains` を設定すれば通常のドメイン証明書も併せて発行される（frontend のみ）。80 番は ACME チャレンジのパスを除いて 443 へリダイレクトし、LB の VIP も 80 / 443 を通してある。残る制約として、証明書の発行・更新が**各ロールの先頭ノード 1 台（`tls_is_leader`）に集中**している。LB 配下の 2 台のどちらにチャレンジが届くか分からないため、leader が応答トークンを相方へ scp し（`certbot-auth-hook`）、取得した証明書も相方へ配って nginx を reload する（`certbot-deploy-hook`）構成で、**leader が停止していると更新できない**。更新は leader の `sakuravel-certbot-renew.timer`（daily）で回しており、shortlived プロファイルは有効期間が短いのでタイマーが止まると失効しやすい。また `tls_peer` が `difference | first` で相方 1 台だけを取るため、**1 ロール 2 台の前提**になっている
+7. **cloud-init は初回起動時にしか走らない。** ネットワーク設定や DSR 周りを変更しても既存ノードには反映されないため、`infra/ansible/site.yml` 側にも同じ設定を持たせている。両方を更新すること
+8. **ディスクは 5 本が上限。** 作り直しを伴う変更は本数制限に当たりやすい。`-replace` を使う際は先に解放されるのを待つ必要がある
+9. **OS 内部のホスト名が Terraform 上の名前と一致しない場合がある。** cloud-init が hostname を適用するのは初回起動時のみのため、改名しても既存ノードには反映されない
+10. **ノードへの ping が返らない。** パケットフィルタに `allow icmp` を入れており API 側にも反映されている（`terraform state show 'sakura_packet_filter_rules.node["frontend"]'` で確認できる）が、実際には外部からの ICMP がノードに届かない。ルータ `.65` と両 VIP はパケットフィルタが無いため応答する。原因未特定。診断用のルールでサービスには影響しないが、**ノードの生死確認に ping は使えない**（上記「パケットフィルタの確認方法」の `nc` を使う）

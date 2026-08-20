@@ -111,21 +111,29 @@ output "db_host" {
 ########################################
 
 output "lb_frontend" {
-  description = "frontend 用ロードバランサ (LB-A) の構成。"
+  description = <<-EOT
+    frontend 用ロードバランサ (LB-A) の構成。
+    appliance_ips は実機のアドレス。冗長構成では2つ (アクティブ/スタンバイ) 並ぶ。
+  EOT
   value = {
-    appliance_ip = local.lb_a_public_ip
-    vip          = local.lb_a_vip
-    port         = var.frontend_port
-    real_servers = [for i in local.frontend_node_indexes : local.node_public_ips[i]]
+    appliance_ips = local.lb_a_public_ips
+    vip           = local.lb_a_vip
+    port          = var.frontend_port
+    redundant     = var.dsr_lb_redundant
+    real_servers  = [for i in local.frontend_node_indexes : local.node_public_ips[i]]
   }
 }
 
 output "lb_api" {
-  description = "api 用ロードバランサ (LB-B) の構成。"
+  description = <<-EOT
+    api 用ロードバランサ (LB-B) の構成。
+    appliance_ips は実機のアドレス。冗長構成では2つ (アクティブ/スタンバイ) 並ぶ。
+  EOT
   value = {
-    appliance_ip = local.lb_b_public_ip
-    vip          = local.lb_b_vip
-    port         = var.dsr_lb_port
-    real_servers = [for i in local.api_node_indexes : local.node_public_ips[i]]
+    appliance_ips = local.lb_b_public_ips
+    vip           = local.lb_b_vip
+    port          = var.dsr_lb_port
+    redundant     = var.dsr_lb_redundant
+    real_servers  = [for i in local.api_node_indexes : local.node_public_ips[i]]
   }
 }

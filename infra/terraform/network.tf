@@ -65,20 +65,36 @@ locals {
 
   db_private_ip = cidrhost(local.app_net_cidr, var.db_ip_offset)
 
+  # LB 1台あたりに必要な本体アドレスの数。
+  # 冗長構成では実機2台が VRRP でアクティブ/スタンバイを組むため、本体アドレスを
+  # 2つ払い出して network_interface.ip_addresses に両方渡す。
+  # (プロバイダ側の制約: ip_addresses は 1〜2 要素。1 なら非冗長、2 なら冗長)
+  lb_appliance_ip_count = var.dsr_lb_redundant ? 2 : 1
+
   # ルータ+スイッチ から払い出されたグローバルIPの割り当て。
   # ip_addresses は昇順の払い出し可能アドレス一覧なので、先頭から順に取る。
-  #   [0] LB-A 本体 / [1] VIP-A / [2] LB-B 本体 / [3] VIP-B / [4]〜 ノード4台
-  lb_a_public_ip = sakura_internet.pub.ip_addresses[0]
-  lb_a_vip       = sakura_internet.pub.ip_addresses[1]
-  lb_b_public_ip = sakura_internet.pub.ip_addresses[2]
-  lb_b_vip       = sakura_internet.pub.ip_addresses[3]
+  #   冗長構成 (既定):
+  #     [0][1] LB-A 本体 / [2] VIP-A / [3][4] LB-B 本体 / [5] VIP-B / [6]〜 ノード4台
+  #   非冗長構成:
+  #     [0] LB-A 本体 / [1] VIP-A / [2] LB-B 本体 / [3] VIP-B / [4]〜 ノード4台
+  lb_a_public_ips = slice(sakura_internet.pub.ip_addresses, 0, local.lb_appliance_ip_count)
+  lb_a_vip        = sakura_internet.pub.ip_addresses[local.lb_appliance_ip_count]
+  lb_b_public_ips = slice(sakura_internet.pub.ip_addresses, local.lb_appliance_ip_count + 1, local.lb_appliance_ip_count * 2 + 1)
+  lb_b_vip        = sakura_internet.pub.ip_addresses[local.lb_appliance_ip_count * 2 + 1]
+
+  # ノードのグローバルIPが始まるインデックス。LB2台ぶんの本体+VIP の直後。
+  node_public_ip_offset = local.lb_appliance_ip_count * 2 + 2
+
+  # ルータ+スイッチ に最低限必要なアドレス数。LB 本体 + VIP + ノード4台。
+  # 冗長構成では 10 個。/28 の払い出しは 11 個なので収まるが余裕は1つしかない。
+  required_public_ip_count = local.node_public_ip_offset + length(local.app_node_indexes)
 
   # ノードのグローバルIP。ルータ+スイッチ に載らない edge は null。
   # node_private_ips と同じくインデックスで引ける形にしておく。
   node_public_ips = [
     for i in range(var.node_count) :
     contains(local.app_node_indexes, i)
-    ? sakura_internet.pub.ip_addresses[4 + index(local.app_node_indexes, i)]
+    ? sakura_internet.pub.ip_addresses[local.node_public_ip_offset + index(local.app_node_indexes, i)]
     : null
   ]
 
@@ -148,6 +164,18 @@ locals {
 # また戻りパケットが直接クライアントへ返る以上、実サーバのデフォルトルートは
 # ルータ+スイッチ側を向いている必要がある。
 
+# 冗長化 (var.dsr_lb_redundant = true):
+#   1つの LB リソースがアプライアンス実機2台として作られ、VRRP でアクティブ/
+#   スタンバイを組む。本体アドレスを実機ごとに1つずつ (計2つ) 与え、VIP は
+#   アクティブ側だけが ARP に応答する。片系が落ちるとスタンバイが VIP を引き継ぐ。
+#   VRID は VRRP のグループ識別子なので、同一セグメント上の LB-A / LB-B で
+#   重複させられない (重複すると互いを同一グループの相手と誤認する)。
+#
+# 注意: network_interface は ip_addresses / vrid / vswitch_id / netmask いずれも
+# RequiresReplace。非冗長 ⇄ 冗長 の切り替えは LB の作り直しになり、上記の
+# インデックスがずれるぶん VIP のアドレスも変わる。DNS を張っている場合は
+# apply 後に向き先を更新すること。
+
 resource "sakura_dsr_lb" "frontend" {
   name        = "lb-frontend"
   description = "intern2026 frontend load balancer (node-02/03)"
@@ -156,14 +184,21 @@ resource "sakura_dsr_lb" "frontend" {
 
   plan = var.dsr_lb_plan
 
-  # ip_addresses は非冗長構成なので1つだけ (冗長化する場合は2つ指定する)。
+  # 冗長構成なら実機2台ぶんの本体アドレス、非冗長なら1つ。
   # VRID は同一セグメントの LB-B と重複させないこと。
   network_interface = {
     vswitch_id   = sakura_internet.pub.vswitch_id
     vrid         = var.dsr_lb_a_vrid
-    ip_addresses = [local.lb_a_public_ip]
+    ip_addresses = local.lb_a_public_ips
     netmask      = sakura_internet.pub.netmask
     gateway      = sakura_internet.pub.gateway
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(sakura_internet.pub.ip_addresses) >= local.required_public_ip_count
+      error_message = "ルータ+スイッチ の払い出しアドレスが足りません。冗長構成では LB 本体4 + VIP2 + ノード4 = 10 個必要です。pub_netmask を広げてください。"
+    }
   }
 
   vip = [{
@@ -201,7 +236,7 @@ resource "sakura_dsr_lb" "api" {
   network_interface = {
     vswitch_id   = sakura_internet.pub.vswitch_id
     vrid         = var.dsr_lb_b_vrid
-    ip_addresses = [local.lb_b_public_ip]
+    ip_addresses = local.lb_b_public_ips
     netmask      = sakura_internet.pub.netmask
     gateway      = sakura_internet.pub.gateway
   }

@@ -51,8 +51,11 @@ variable "db_ip_offset" {
 variable "pub_netmask" {
   description = <<-EOT
     ルータ+スイッチ に払い出すグローバルセグメントのプレフィックス長。26 / 27 / 28 のいずれか。
-    28 なら 16 アドレスのうち先頭がネットワーク・ルータ用に予約され、残りが払い出される。
-    LB本体×2 + VIP×2 + ノード×4 = 8 個使うので 28 で足りる。
+    28 なら 16 アドレスのうち5個がネットワーク・ルータ・ブロードキャスト用に予約され、
+    残り 11 個が払い出される。
+    冗長構成 (dsr_lb_redundant = true) では
+    LB本体×4 + VIP×2 + ノード×4 = 10 個使うので 28 でぎりぎり収まる。
+    ノードを増やす場合は 27 に広げること。
   EOT
   type        = number
   default     = 28
@@ -189,6 +192,7 @@ variable "db_parameters" {
 #   LB-B: VIP-B:dsr_lb_port   → node-04 / node-05 (api)
 # 本体アドレスと VIP はどちらも sakura_internet.pub の払い出しから取るため、
 # オフセット変数は持たない (network.tf の locals を参照)。
+# 既定では両方とも冗長構成 (dsr_lb_redundant = true)。
 
 variable "dsr_lb_plan" {
   description = "DSR ロードバランサのプラン。standard / highspec のいずれか。2台とも同じプランを使う。"
@@ -199,6 +203,19 @@ variable "dsr_lb_plan" {
     condition     = contains(["standard", "highspec"], var.dsr_lb_plan)
     error_message = "dsr_lb_plan は standard か highspec のいずれかを指定してください。"
   }
+}
+
+variable "dsr_lb_redundant" {
+  description = <<-EOT
+    ロードバランサを冗長構成にするか。
+    true にすると LB 1台あたりアプライアンス実機が2台作られ、VRRP でアクティブ/
+    スタンバイを組む。VIP はアクティブ側が保持し、片系障害時に引き継がれる。
+    そのぶんグローバルIPを LB あたり2個 (本体) 消費する。
+    false は実機1台の非冗長構成で、消費は LB あたり1個。
+    切り替えは LB の作り直しになり、アドレスの割り当て順がずれるため VIP も変わる。
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "dsr_lb_a_vrid" {
