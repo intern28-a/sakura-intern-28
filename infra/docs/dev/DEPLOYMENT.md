@@ -40,7 +40,7 @@ chmod 644 ~/.ssh/intern28.pub
 Terraform用のローカルファイルを作成します。このファイルはGitへコミットしません。
 
 ```bash
-cd terraform
+cd ../terraform
 cp secret.auto.tfvars.example secret.auto.tfvars
 ```
 
@@ -83,7 +83,7 @@ chmod 600 group_vars/all.yml
 `group_vars/all.yml` に、1Passwordからレジストリ認証情報とManaged DB接続情報を記入します。
 
 ```yaml
-registry_host: intern-fuga.sakuracr.jp
+registry_host: "..."
 registry_username: "..."
 registry_password: "..."
 
