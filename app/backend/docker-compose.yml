@@ -13,6 +13,9 @@ services:
 
   db:
     image: mariadb:10.11
+    # post_ranking を更新する EVENT を動かすために必要。
+    # event_scheduler は SUPER 権限が要る起動時設定で、SET GLOBAL では永続化できない。
+    command: --event-scheduler=ON
     environment:
       MYSQL_DATABASE: sakuravel
       MYSQL_USER: sakuravel
